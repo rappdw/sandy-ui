@@ -48,9 +48,16 @@ When `package.json` `version` is bumped and `npm run release` is run, **also upd
 - **Settings scope model**. Project (default) and Global tabs each edit their own `<scope>/.sandy/config` and `<scope>/.sandy/.secrets`. Secrets are scope-aware — the spec originally pinned all secrets to `~/.sandy/.secrets` for safety; that was loosened. Workspace `.secrets` is a footgun for committed repos; the form shows a warning banner about adding `.sandy/.secrets` to `.gitignore`. **Every schema field renders in both tabs** regardless of its `tier` — `tier` is documentation, not a hard constraint. Privileged keys get a yellow border in both tabs; the workspace-tab warning explains that workspace-set privileged keys trigger the passive-privileged approval flow on next launch (home-set ones don't, since the user explicitly set them in their own dir).
 - **Workspace selection is explicit, never inferred**. `openTerminalPanel` prompts with the folder picker if no workspace folder is open. **Never silently fall back to `$HOME`** — sandy scans its workspace and would touch every macOS-protected directory, triggering a TCC prompt cascade attributed to VSCode.
 
+## Schema source
+
+`src/schema/cache.ts` invokes `sandy --print-schema`, parses the JSON, and caches the result in `globalStorageUri/schema-cache.json`. The cache is keyed by `sandy --version` output — when sandy upgrades, the next `getCachedSchema` call detects the version mismatch and refetches. Cache writes are atomic (temp + rename); cache write failures are non-fatal (always returns a usable schema).
+
+`src/schema/parse.ts` translates sandy's three-tier shape (`privileged_keys` / `passive_keys` / `env_only_keys`) into the extension's flat `fields[]` representation, renaming `name`→`key`, `choices`→`options`, `passive_approval_required`→`privileged`. `env_only_keys` are deliberately skipped (not file-configurable, no useful UI). Sandy's introspection JSON contract lives at `SPEC_INTROSPECTION.md` in the sandy repo.
+
+`src/mocks/schema.json` is the **fallback** when sandy isn't on PATH or `--print-schema` fails — bundled into the vsix via tsconfig's `resolveJsonModule`. The fallback path is logged to the "Sandy Settings" output channel so users can tell when they're seeing real schema vs mock.
+
 ## Things that look like architecture but aren't
 
-- Mocks in `src/mocks/` are placeholders until sandy 0.12.0 ships `--print-schema`. Production code reads schema from `sandy --print-schema`, falls back to mocks if sandy is unavailable.
 - `media/terminal/vendor/` is gitignored — populated by `npm run copy-xterm` from node_modules. Don't edit those files; edit `scripts/copy-xterm.js` if the bundled file list needs to change.
 
 ## node-pty rebuild gotcha

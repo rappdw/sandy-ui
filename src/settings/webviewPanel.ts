@@ -7,11 +7,12 @@ import {
   workspaceConfigPath, workspaceSecretsPath,
   secretsPathFor,
 } from "./configIO";
-// Schema mock is bundled at compile time via resolveJsonModule. No runtime
-// file lookup — works whether running from src/ during F5 dev or from the
-// installed vsix where src/ doesn't exist. Will be replaced by a `sandy
-// --print-schema` invocation in 0.1.0.
+// Schema source: invoke `sandy --print-schema` (cached by sandy version);
+// fall back to the bundled mock if sandy isn't on PATH or the invocation
+// fails. The mock stays bundled-via-resolveJsonModule so it ships with the
+// vsix for the offline-fallback path.
 import schemaMock from "../mocks/schema.json";
+import { getCachedSchema } from "../schema/cache";
 
 const out = vscode.window.createOutputChannel("Sandy Settings");
 const log = (msg: string) => out.appendLine(`[${new Date().toISOString()}] ${msg}`);
@@ -36,8 +37,11 @@ export function openSettingsPanel(ctx: vscode.ExtensionContext) {
     css:       mediaUri("settings.css"),
   });
 
-  const schema = schemaMock as Schema;
+  const resolution = getCachedSchema(ctx.globalStorageUri.fsPath, schemaMock as Schema);
+  const schema = resolution.schema;
   out.show(true);
+  log(`schema source=${resolution.source}` + (resolution.sandy_version ? ` (sandy ${resolution.sandy_version})` : ""));
+  if (resolution.error) log(`schema fallback reason: ${resolution.error}`);
 
   const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   const wsConfigPath  = ws ? workspaceConfigPath(ws)  : undefined;
