@@ -3,9 +3,11 @@ out/
 *.vsix
 .vscode-test/
 media/terminal/vendor/
+coverage/
 
 # Per-user / local-only
 .claude/
 .idea/
+.sandy/
 Screenshot*.png
 *.log

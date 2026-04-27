@@ -12,6 +12,9 @@ VSCode extension wrapping the [sandy](https://github.com/rappdw/sandy) CLI. Host
 npm install                # also runs the node-pty native build
 npm run compile            # tsc + copy xterm.js assets to media/terminal/vendor/
 npm run watch              # tsc -watch (pair with F5 dev host for live iteration)
+npm test                   # vitest run — unit tests for pure-logic modules
+npm run test:watch         # vitest interactive
+npm run test:coverage      # vitest with v8 coverage report
 npm run package-vsix       # produces sandy-ui-<version>.vsix in repo root
 npm run install-vsix       # packages + installs into your real VSCode (--force overwrite)
 npm run release            # packages + creates GitHub release with vsix attached, tagged v<version>
@@ -22,6 +25,13 @@ F5 in VSCode opens the Extension Development Host — fastest dev loop. `install
 ## On every release
 
 When `package.json` `version` is bumped and `npm run release` is run, **also update the `curl` command in README.md's "Install (latest release)" section** to point at the new tag. The version is pinned in two places (package.json + README install one-liner) and they must stay synchronized.
+
+## Tests
+
+- **Unit tests** live under `test/`, run via Vitest (`npm test`). Pure-logic modules only — `oscHandler`, `configIO`, `sandyState`. Each module also exports a path-parameterized variant (e.g., `sweepStaleLocksIn` alongside the production `sweepStaleLocks`) so tests don't touch the user's real `~/.sandy/`.
+- **Integration tests** (post-0.2.0): `@vscode/test-electron` runs the extension in a headless VSCode and exercises commands. Belongs under `test/integration/`. Files like `webviewPanel.ts`, `pty.ts`, and the approval webviews can only be covered this way.
+- **Coverage targets**: 80%+ on pure-logic modules (currently ~95% for `oscHandler` and `sandyState`). Don't chase coverage on files explicitly excluded in `vitest.config.ts` — they're integration-test territory.
+- When adding a feature with branching logic (config parsing, lock detection, schema partitioning, etc.), add a Vitest case alongside it. The pattern that bit twice during the spike — silent runtime errors in webview code — is the strongest argument for tests + the eventual webview-JS-to-TS migration.
 
 ## Architecture you can't infer from file names
 

@@ -11,7 +11,7 @@ import * as os from "os";
 // On VSCode reload / crash sandy's cleanup trap doesn't always run, leaving
 // the lock behind even though the PID is dead. This module sweeps for those.
 
-const SANDBOX_DIR = path.join(os.homedir(), ".sandy", "sandboxes");
+export const DEFAULT_SANDBOX_DIR = path.join(os.homedir(), ".sandy", "sandboxes");
 
 export interface LockSweepResult {
   cleaned: string[];   // lock paths removed (PID was dead)
@@ -19,16 +19,22 @@ export interface LockSweepResult {
   unknown: string[];   // lock paths we couldn't parse — left alone
 }
 
+// Production callers use sweepStaleLocks (defaults to ~/.sandy/sandboxes/).
+// Tests use sweepStaleLocksIn against a tmp dir.
 export function sweepStaleLocks(workspaceFsPath: string): LockSweepResult {
+  return sweepStaleLocksIn(DEFAULT_SANDBOX_DIR, workspaceFsPath);
+}
+
+export function sweepStaleLocksIn(sandboxDir: string, workspaceFsPath: string): LockSweepResult {
   const result: LockSweepResult = { cleaned: [], alive: [], unknown: [] };
-  if (!fs.existsSync(SANDBOX_DIR)) return result;
+  if (!fs.existsSync(sandboxDir)) return result;
 
   const baseName = path.basename(workspaceFsPath);
   const prefix = `.${baseName}-`;
 
-  for (const entry of fs.readdirSync(SANDBOX_DIR)) {
+  for (const entry of fs.readdirSync(sandboxDir)) {
     if (!entry.endsWith(".lock") || !entry.startsWith(prefix)) continue;
-    const lockPath = path.join(SANDBOX_DIR, entry);
+    const lockPath = path.join(sandboxDir, entry);
     const pid = readLockPid(lockPath);
     if (pid == null) {
       result.unknown.push(lockPath);
@@ -48,7 +54,7 @@ export function sweepStaleLocks(workspaceFsPath: string): LockSweepResult {
   return result;
 }
 
-function readLockPid(lockPath: string): number | null {
+export function readLockPid(lockPath: string): number | null {
   try {
     const stat = fs.statSync(lockPath);
     if (stat.isFile()) {
@@ -76,7 +82,7 @@ function parseFirstInt(text: string): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-function isPidAlive(pid: number): boolean {
+export function isPidAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; }    // signal 0 = liveness probe
   catch { return false; }
 }

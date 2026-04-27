@@ -5,7 +5,10 @@
   "version": "0.0.1",
   "publisher": "rappdw",
   "private": true,
-  "repository": { "type": "git", "url": "https://github.com/rappdw/sandy-ui.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rappdw/sandy-ui.git"
+  },
   "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
@@ -62,6 +65,9 @@
     "compile":           "npm run copy-xterm && tsc -p ./",
     "watch":             "tsc -watch -p ./",
     "copy-xterm":        "node scripts/copy-xterm.js",
+    "test":              "vitest run",
+    "test:watch":        "vitest",
+    "test:coverage":     "vitest run --coverage",
     "vscode:prepublish": "npm run compile",
     "package-vsix":      "vsce package",
     "install-vsix":      "npm run package-vsix && code --install-extension \"$(ls -t *.vsix | head -1)\" --force",
@@ -74,11 +80,14 @@
     "@electron/rebuild": "^4.0.4",
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
+    "@vitest/coverage-v8": "^4.1.5",
     "@vscode/vsce": "^3.2.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
     "electron": "^41.3.0",
-    "typescript": "^5.4.0"
+    "esbuild": "^0.28.0",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.5"
   }
 }
