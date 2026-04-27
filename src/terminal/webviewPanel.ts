@@ -57,6 +57,12 @@ export async function openTerminalPanel(ctx: vscode.ExtensionContext, workspaceO
     : {};
   if (preflight.setApproveEnv) log("preflight: SANDY_AUTO_APPROVE_PRIVILEGED=1 set for THIS launch only");
 
+  // Maximize editor space for the sandy session if the user has opted in
+  // (defaults: bottom panel + auxiliary bar closed; primary sidebar kept).
+  // Each command is fire-and-forget — we don't await, don't fail launch
+  // if any errors. void executeCommand returns are intentional.
+  await maximizeEditorSpaceIfRequested();
+
   const panel = vscode.window.createWebviewPanel(
     "sandy.terminal",
     "Sandy",
@@ -178,6 +184,25 @@ export async function openTerminalPanel(ctx: vscode.ExtensionContext, workspaceO
     log(`pid ${handle.pid} unresponsive, sending SIGKILL`);
     handle.kill("SIGKILL");
   });
+}
+
+// Reads sandy.launch.close{BottomPanel,AuxiliaryBar,Sidebar} settings and
+// fires VSCode's built-in close commands for whichever are enabled. All
+// errors are swallowed — this is best-effort UX, never blocks the launch.
+async function maximizeEditorSpaceIfRequested(): Promise<void> {
+  const cfg = vscode.workspace.getConfiguration("sandy.launch");
+  const closeBottom = cfg.get<boolean>("closeBottomPanel",  true);
+  const closeAux    = cfg.get<boolean>("closeAuxiliaryBar", true);
+  const closeSide   = cfg.get<boolean>("closeSidebar",      false);
+
+  const tryRun = async (cmd: string): Promise<void> => {
+    try { await vscode.commands.executeCommand(cmd); }
+    catch { /* command may not exist on older VSCode; non-fatal */ }
+  };
+
+  if (closeBottom) await tryRun("workbench.action.closePanel");
+  if (closeAux)    await tryRun("workbench.action.closeAuxiliaryBar");
+  if (closeSide)   await tryRun("workbench.action.closeSidebar");
 }
 
 function handleOsc(panel: vscode.WebviewPanel, ev: OscEvent) {

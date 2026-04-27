@@ -68,6 +68,21 @@
           "type": "string",
           "default": "",
           "description": "Override the launch command. Empty = auto-detect (executable on PATH: sandy → tmux → $SHELL). Example: \"tmux new-session -A -s sandy-spike\" or \"/bin/bash -l\"."
+        },
+        "sandy.launch.closeBottomPanel": {
+          "type": "boolean",
+          "default": true,
+          "description": "On Sandy: Launch, close the bottom panel (Problems / Output / Terminal / Debug Console) to maximize editor space."
+        },
+        "sandy.launch.closeAuxiliaryBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "On Sandy: Launch, close the auxiliary side bar (where Chat / Copilot panel typically lives) to maximize editor space."
+        },
+        "sandy.launch.closeSidebar": {
+          "type": "boolean",
+          "default": false,
+          "description": "On Sandy: Launch, close the primary side bar (Explorer / Search / SCM). Off by default since the file tree is usually wanted alongside sandy."
         }
       }
     }
