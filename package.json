@@ -20,31 +20,26 @@
   "activationEvents": [],
   "contributes": {
     "commands": [
-      {
-        "command": "sandy.launch",
-        "title": "Sandy: Launch (in webview tab)"
-      },
-      {
-        "command": "sandy.approval.test",
-        "title": "Sandy: Test Approval Modal"
-      },
-      {
-        "command": "sandy.settings.open",
-        "title": "Sandy: Open Settings"
-      },
-      {
-        "command": "sandy.state.refresh",
-        "title": "Sandy: Refresh State",
-        "icon": "$(refresh)"
-      }
+      { "command": "sandy.launch",                    "title": "Sandy: Launch (in webview tab)" },
+      { "command": "sandy.approval.test",             "title": "Sandy: Test Approval Modal" },
+      { "command": "sandy.settings.open",             "title": "Sandy: Open Settings" },
+      { "command": "sandy.state.refresh",             "title": "Sandy: Refresh State", "icon": "$(refresh)" },
+      { "command": "sandy.tree.launch",               "title": "Launch sandy here" },
+      { "command": "sandy.tree.openWorkspace",        "title": "Open Workspace Folder…" },
+      { "command": "sandy.tree.openWorkspaceNewWin",  "title": "Open Workspace in New Window" },
+      { "command": "sandy.tree.revealSandbox",        "title": "Reveal Sandbox in File Manager" },
+      { "command": "sandy.tree.copyWorkspacePath",    "title": "Copy Workspace Path" }
     ],
     "menus": {
       "view/title": [
-        {
-          "command": "sandy.state.refresh",
-          "when": "view == sandy.projects",
-          "group": "navigation"
-        }
+        { "command": "sandy.state.refresh", "when": "view == sandy.projects", "group": "navigation" }
+      ],
+      "view/item/context": [
+        { "command": "sandy.tree.launch",              "when": "view == sandy.projects && viewItem =~ /^sandbox\\./", "group": "1_run@1" },
+        { "command": "sandy.tree.openWorkspace",       "when": "view == sandy.projects && viewItem =~ /^sandbox\\./", "group": "2_open@1" },
+        { "command": "sandy.tree.openWorkspaceNewWin", "when": "view == sandy.projects && viewItem =~ /^sandbox\\./", "group": "2_open@2" },
+        { "command": "sandy.tree.revealSandbox",       "when": "view == sandy.projects && viewItem =~ /^sandbox\\./", "group": "3_reveal@1" },
+        { "command": "sandy.tree.copyWorkspacePath",   "when": "view == sandy.projects && viewItem =~ /^sandbox\\./", "group": "3_reveal@2" }
       ]
     },
     "viewsContainers": {
