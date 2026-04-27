@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { spawnPty, launchCandidates, buildCleanEnv, PtyHandle } from "./pty";
 import { OscEvent } from "./oscHandler";
 import { sweepStaleLocks } from "./sandyState";
+import { checkPreflightApproval } from "../approval/preflight";
 
 const out = vscode.window.createOutputChannel("Sandy");
 const log = (msg: string) => out.appendLine(`[${new Date().toISOString()}] ${msg}`);
@@ -39,6 +40,22 @@ export async function openTerminalPanel(ctx: vscode.ExtensionContext, workspaceO
     }
     ws = picked[0].fsPath;
   }
+
+  // Pre-flight approval check. Runs `sandy --validate-config` and shows the
+  // approval modal if the workspace config has privileged keys requiring
+  // explicit approval. Errors from validate are non-fatal — we proceed and
+  // let sandy itself enforce approval at launch time.
+  const preflight = await checkPreflightApproval(ctx, ws);
+  if (preflight.error) log(`preflight: ${preflight.error} (proceeding; sandy will enforce)`);
+  if (preflight.validation?.approval_status) log(`preflight: approval_status=${preflight.validation.approval_status}`);
+  if (!preflight.proceed) {
+    log("preflight: user rejected — launch cancelled");
+    return;
+  }
+  const approveEnv: Record<string, string> = preflight.setApproveEnv
+    ? { SANDY_AUTO_APPROVE_PRIVILEGED: "1" }
+    : {};
+  if (preflight.setApproveEnv) log("preflight: SANDY_AUTO_APPROVE_PRIVILEGED=1 set for THIS launch only");
 
   const panel = vscode.window.createWebviewPanel(
     "sandy.terminal",
@@ -86,7 +103,7 @@ export async function openTerminalPanel(ctx: vscode.ExtensionContext, workspaceO
           log(`lock sweep failed (continuing): ${e?.message ?? e}`);
         }
 
-        const env = buildCleanEnv();
+        const env = buildCleanEnv(approveEnv);
         log(`PATH: ${env.PATH}`);
 
         // Allow explicit override via workspace setting.

@@ -1,10 +1,27 @@
 import * as vscode from "vscode";
 import { HEADER, SUBTEXT, HOSTILE_KEYVALUES } from "./sample";
 
-// Webview-based fallback: full control over text rendering, no risk of the
-// renderer collapsing whitespace or HTML-encoding special chars (we use
-// textContent assignment in the webview JS, never innerHTML).
-export async function openApprovalWebview(ctx: vscode.ExtensionContext): Promise<"approve" | "reject" | undefined> {
+// Webview-based approval modal: full control over text rendering, no risk
+// of the renderer collapsing whitespace or HTML-encoding special chars (the
+// webview JS uses textContent, never innerHTML).
+//
+// Production use: the pre-flight flow in preflight.ts calls this with the
+// real validated KEY=VALUE block.
+//
+// Demo use: the "Sandy: Test Approval Modal" command calls this with the
+// hostile sample content from sample.ts to verify the modal renders
+// special chars verbatim.
+
+export interface ApprovalPayload {
+  header:  string;
+  subtext: string;
+  body:    string;
+}
+
+export async function openApprovalWebview(
+  ctx: vscode.ExtensionContext,
+  payload: ApprovalPayload = { header: HEADER, subtext: SUBTEXT, body: HOSTILE_KEYVALUES },
+): Promise<"approve" | "reject" | undefined> {
   const panel = vscode.window.createWebviewPanel(
     "sandy.approval",
     "Sandy: approval required",
@@ -32,8 +49,8 @@ export async function openApprovalWebview(ctx: vscode.ExtensionContext): Promise
     panel.webview.onDidReceiveMessage((m: { type: "ready" } | { type: "decision"; value: "approve" | "reject" }) => {
       if (m.type === "ready") {
         // Send raw payload AS DATA (not HTML) so the webview can render it
-        // via textContent — no encoding risk.
-        panel.webview.postMessage({ type: "render", header: HEADER, subtext: SUBTEXT, body: HOSTILE_KEYVALUES });
+        // via textContent — no encoding risk for KEY=VALUE content.
+        panel.webview.postMessage({ type: "render", header: payload.header, subtext: payload.subtext, body: payload.body });
       } else if (m.type === "decision") {
         if (!resolved) { resolved = true; resolve(m.value); }
         panel.dispose();
