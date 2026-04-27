@@ -1,0 +1,11 @@
+node_modules/
+out/
+*.vsix
+.vscode-test/
+media/terminal/vendor/
+
+# Per-user / local-only
+.claude/
+.idea/
+Screenshot*.png
+*.log

@@ -1,0 +1,40 @@
+body {
+  font-family: var(--vscode-font-family);
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+  padding: 24px;
+  max-width: 760px;
+  margin: 0 auto;
+}
+h1 { font-size: 18px; margin: 0 0 12px; }
+p  { margin: 0 0 16px; color: var(--vscode-descriptionForeground); }
+pre {
+  background: var(--vscode-textBlockQuote-background, #2a2a2a);
+  border: 1px solid var(--vscode-input-border, #3c3c3c);
+  border-radius: 4px;
+  padding: 12px;
+  font-family: var(--vscode-editor-font-family, "Menlo", monospace);
+  font-size: 12px;
+  white-space: pre;       /* preserve whitespace exactly, no wrap */
+  overflow-x: auto;
+  margin: 0 0 24px;
+}
+#actions { display: flex; gap: 8px; justify-content: flex-end; }
+button {
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+  padding: 6px 14px;
+  border-radius: 2px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.approve {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+.approve:hover { background: var(--vscode-button-hoverBackground); }
+.reject {
+  background: var(--vscode-button-secondaryBackground, #3a3d41);
+  color: var(--vscode-button-secondaryForeground, #fff);
+}
+.reject:hover { background: var(--vscode-button-secondaryHoverBackground, #45494e); }

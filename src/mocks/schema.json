@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "sandy_version": "0.12.0-spike-mock",
+  "fields": [
+    {
+      "key": "SANDY_AGENT",
+      "type": "agent_combo",
+      "tier": "home",
+      "options": ["claude", "codex", "gemini"],
+      "default": "claude",
+      "description": "Which AI agent(s) to launch. Multi-select serializes as comma-separated."
+    },
+    {
+      "key": "SANDY_MODEL",
+      "type": "string",
+      "tier": "home",
+      "pattern": "^[a-z0-9._-]+$",
+      "default": "claude-opus-4-7",
+      "description": "Default model name passed to the agent."
+    },
+    {
+      "key": "SANDY_TIMEOUT_SECS",
+      "type": "int",
+      "tier": "home",
+      "min": 30,
+      "max": 86400,
+      "default": 3600,
+      "description": "Per-session timeout before sandy auto-stops the container."
+    },
+    {
+      "key": "SANDY_SSH",
+      "type": "enum",
+      "tier": "home",
+      "options": ["agent", "token", "off"],
+      "default": "agent",
+      "description": "How sandy provides SSH access inside the container."
+    },
+    {
+      "key": "SANDY_TELEMETRY",
+      "type": "bool",
+      "tier": "home",
+      "default": false,
+      "description": "Opt in to anonymous usage telemetry."
+    },
+    {
+      "key": "ANTHROPIC_API_KEY",
+      "type": "secret",
+      "tier": "secrets",
+      "description": "Claude API key (written to ~/.sandy/.secrets, not the config file)."
+    },
+    {
+      "key": "SANDY_SKIP_PERMISSIONS",
+      "type": "bool",
+      "tier": "workspace",
+      "privileged": true,
+      "default": false,
+      "description": "Skip in-container permission checks. Privileged — requires explicit approval per workspace."
+    },
+    {
+      "key": "SANDY_ALLOW_LAN_HOSTS",
+      "type": "string",
+      "tier": "workspace",
+      "privileged": true,
+      "pattern": "^([0-9./,:a-fA-F]+|)$",
+      "description": "Comma-separated CIDR list of LAN hosts the container can reach. Privileged."
+    }
+  ]
+}

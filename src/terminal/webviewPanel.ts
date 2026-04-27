@@ -1,0 +1,214 @@
+import * as vscode from "vscode";
+import { spawnPty, launchCandidates, buildCleanEnv, PtyHandle } from "./pty";
+import { OscEvent } from "./oscHandler";
+import { sweepStaleLocks } from "./sandyState";
+
+const out = vscode.window.createOutputChannel("Sandy");
+const log = (msg: string) => out.appendLine(`[${new Date().toISOString()}] ${msg}`);
+
+// Messages between the webview (xterm.js) and the extension host (PTY owner).
+type ToHost =
+  | { type: "ready"; cols: number; rows: number }
+  | { type: "input"; data: string }
+  | { type: "resize"; cols: number; rows: number }
+  | { type: "osc";    event: OscEvent }
+  | { type: "log";    level: "info" | "error"; msg: string };
+
+type FromHost =
+  | { type: "init"; cols: number; rows: number }
+  | { type: "data"; data: string }
+  | { type: "exit"; code: number };
+
+export async function openTerminalPanel(ctx: vscode.ExtensionContext) {
+  let ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!ws) {
+    const picked = await vscode.window.showOpenDialog({
+      canSelectFolders: true, canSelectFiles: false, canSelectMany: false,
+      title: "Pick a workspace folder for sandy",
+      openLabel: "Use as workspace",
+    });
+    if (!picked || picked.length === 0) {
+      vscode.window.showWarningMessage("Sandy: no workspace selected — launch cancelled. (Sandy scans the workspace; defaulting to ~/ would touch every protected dir on macOS.)");
+      return;
+    }
+    ws = picked[0].fsPath;
+  }
+
+  const panel = vscode.window.createWebviewPanel(
+    "sandy.terminal",
+    "Sandy",
+    vscode.ViewColumn.Active,
+    {
+      enableScripts: true,
+      retainContextWhenHidden: true,  // keep xterm buffer alive across hide/show
+      localResourceRoots: [vscode.Uri.joinPath(ctx.extensionUri, "media")],
+    }
+  );
+
+  const mediaUri = (sub: string) =>
+    panel.webview.asWebviewUri(vscode.Uri.joinPath(ctx.extensionUri, "media", "terminal", sub));
+  panel.webview.html = renderHtml({
+    cspSource: panel.webview.cspSource,
+    xtermJs:    mediaUri("vendor/xterm.js"),
+    xtermCss:   mediaUri("vendor/xterm.css"),
+    fitAddon:   mediaUri("vendor/addon-fit.js"),
+    linksAddon: mediaUri("vendor/addon-web-links.js"),
+    bridgeJs:   mediaUri("bridge.js"),
+    css:        mediaUri("terminal.css"),
+  });
+
+  let pty: PtyHandle | undefined;
+  let ptyExited = false;
+  let dataChunks = 0;
+  const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+  log(`openTerminalPanel: workspace=${ws}`);
+
+  const sub = panel.webview.onDidReceiveMessage((m: ToHost) => {
+    switch (m.type) {
+      case "ready": {
+        log(`webview ready (initial size ${m.cols}x${m.rows})`);
+
+        // Stale-lock sweep before launch. VSCode reload / crash interrupts
+        // sandy's cleanup trap and leaves locks behind that block re-launch.
+        try {
+          const sweep = sweepStaleLocks(ws);
+          if (sweep.cleaned.length) log(`cleaned ${sweep.cleaned.length} stale lock(s): ${sweep.cleaned.join(", ")}`);
+          if (sweep.alive.length)   log(`live lock(s) — sandy will refuse to launch: ${sweep.alive.join(", ")}`);
+          if (sweep.unknown.length) log(`unparseable lock(s) left alone: ${sweep.unknown.join(", ")}`);
+        } catch (e: any) {
+          log(`lock sweep failed (continuing): ${e?.message ?? e}`);
+        }
+
+        const env = buildCleanEnv();
+        log(`PATH: ${env.PATH}`);
+
+        // Allow explicit override via workspace setting.
+        const override = vscode.workspace.getConfiguration("sandy").get<string>("launchCommand", "").trim();
+        const candidates = override
+          ? [{ command: override.split(/\s+/)[0], args: override.split(/\s+/).slice(1) }]
+          : launchCandidates();
+        log(`candidates: ${candidates.map(c => `${c.command} ${c.args.join(" ")}`.trim()).join("  |  ")}`);
+
+        let chosen: { command: string; args: string[] } | undefined;
+        const errors: string[] = [];
+        for (const c of candidates) {
+          try {
+            log(`trying: ${c.command} ${c.args.join(" ")}`);
+            pty = spawnPty({ command: c.command, args: c.args, cwd: ws, env, cols: m.cols || 80, rows: m.rows || 24 });
+            chosen = c;
+            log(`spawned: ${c.command} pid=${pty.pid}`);
+            break;
+          } catch (e: any) {
+            const msg = `${c.command}: ${e?.message ?? e}`;
+            errors.push(msg);
+            log(`spawn failed for ${msg}`);
+          }
+        }
+        if (!pty || !chosen) {
+          const msg = `All launch candidates failed:\n  ${errors.join("\n  ")}`;
+          vscode.window.showErrorMessage(`Sandy: ${errors[errors.length - 1] ?? "no command worked"}`);
+          panel.webview.postMessage(<FromHost>{ type: "data", data: `\r\n\x1b[31m[host] ${msg}\x1b[0m\r\n` });
+          return;
+        }
+        pty.onData((d) => {
+          dataChunks++;
+          if (dataChunks <= 3 || dataChunks % 50 === 0) log(`pty→webview chunk #${dataChunks} (${d.length} bytes)`);
+          panel.webview.postMessage(<FromHost>{ type: "data", data: d });
+        });
+        pty.onExit((code) => {
+          ptyExited = true;
+          log(`pty exited code=${code} (after ${dataChunks} chunks)`);
+          panel.webview.postMessage(<FromHost>{ type: "exit", code });
+          panel.title = `Sandy (exit ${code})`;
+        });
+        panel.title = `Sandy (${chosen.command.split("/").pop()} ${chosen.args.join(" ")})`.trim();
+        break;
+      }
+      case "input":  pty?.write(m.data); break;
+      case "resize": log(`resize ${m.cols}x${m.rows}`); pty?.resize(m.cols, m.rows); break;
+      case "osc":    handleOsc(panel, m.event); break;
+      case "log":    log(`[webview ${m.level}] ${m.msg}`); break;
+    }
+  });
+
+  // Surface the output channel proactively so the user sees what's happening.
+  out.show(true);
+
+  // Proper signal escalation per SPEC §"Session supervisor":
+  // SIGINT (give cleanup trap a chance) → SIGTERM → SIGKILL.
+  // Without the wait between signals, sandy's cleanup trap is interrupted
+  // by SIGHUP from PTY closure and stale lock files survive in
+  // ~/.sandy/sandboxes/.
+  panel.onDidDispose(async () => {
+    sub.dispose();
+    if (!pty || ptyExited) return;
+    const handle = pty;
+    log(`tab disposed, escalating shutdown for pid ${handle.pid}`);
+    handle.kill("SIGINT");
+    await sleep(3000);
+    if (ptyExited) { log(`pid ${handle.pid} exited cleanly after SIGINT`); return; }
+    log(`pid ${handle.pid} still alive, sending SIGTERM`);
+    handle.kill("SIGTERM");
+    await sleep(2000);
+    if (ptyExited) { log(`pid ${handle.pid} exited after SIGTERM`); return; }
+    log(`pid ${handle.pid} unresponsive, sending SIGKILL`);
+    handle.kill("SIGKILL");
+  });
+}
+
+function handleOsc(panel: vscode.WebviewPanel, ev: OscEvent) {
+  switch (ev.kind) {
+    case "notification": {
+      const msg = ev.body ? `${ev.title} — ${ev.body}` : ev.title;
+      vscode.window.showInformationMessage(`[OSC ${ev.code}] ${msg}`);
+      // Tab badge — VSCode's webview API doesn't expose dot badges directly,
+      // but title prefix is the common workaround.
+      if (!panel.title.startsWith("● ")) panel.title = "● " + panel.title;
+      break;
+    }
+    case "clipboard": {
+      vscode.env.clipboard.writeText(ev.data).then(() =>
+        vscode.window.setStatusBarMessage(`Sandy: copied ${ev.data.length} bytes via OSC 52`, 3000)
+      );
+      break;
+    }
+    case "title": {
+      panel.title = ev.title;
+      break;
+    }
+    case "hyperlink": {
+      // No-op for spike — xterm-addon-web-links handles plain http(s) links.
+      break;
+    }
+  }
+}
+
+function renderHtml(uris: {
+  cspSource: string;
+  xtermJs:    vscode.Uri;
+  xtermCss:   vscode.Uri;
+  fitAddon:   vscode.Uri;
+  linksAddon: vscode.Uri;
+  bridgeJs:   vscode.Uri;
+  css:        vscode.Uri;
+}): string {
+  const csp = `default-src 'none'; script-src ${uris.cspSource}; style-src ${uris.cspSource} 'unsafe-inline'; font-src ${uris.cspSource};`;
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="${csp}" />
+  <link rel="stylesheet" href="${uris.xtermCss}" />
+  <link rel="stylesheet" href="${uris.css}" />
+</head>
+<body>
+  <div id="terminal"></div>
+  <script src="${uris.xtermJs}"></script>
+  <script src="${uris.fitAddon}"></script>
+  <script src="${uris.linksAddon}"></script>
+  <script src="${uris.bridgeJs}"></script>
+</body>
+</html>`;
+}
+

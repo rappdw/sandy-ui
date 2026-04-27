@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "approval_status": "pending",
+  "approval_payload": [
+    "SANDY_SKIP_PERMISSIONS=1",
+    "SANDY_ALLOW_LAN_HOSTS=10.0.0.0/24,192.168.1.0/24"
+  ],
+  "warnings": [
+    { "key": "SANDY_UNKNOWN_KEY", "severity": "low", "message": "Unknown key" }
+  ]
+}

@@ -1,0 +1,80 @@
+{
+  "name": "sandy-ui",
+  "displayName": "Sandy UI",
+  "description": "VSCode extension wrapping the sandy CLI — webview-hosted terminal, schema-driven settings, pre-flight approvals.",
+  "version": "0.0.1",
+  "publisher": "rappdw",
+  "private": true,
+  "repository": { "type": "git", "url": "https://github.com/rappdw/sandy-ui.git" },
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "sandy.launch",
+        "title": "Sandy: Launch (in webview tab)"
+      },
+      {
+        "command": "sandy.approval.test",
+        "title": "Sandy: Test Approval Modal"
+      },
+      {
+        "command": "sandy.settings.open",
+        "title": "Sandy: Open Settings"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "sandy",
+          "title": "Sandy",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "sandy": [
+        {
+          "id": "sandy.projects",
+          "name": "Projects"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Sandy",
+      "properties": {
+        "sandy.launchCommand": {
+          "type": "string",
+          "default": "",
+          "description": "Override the launch command. Empty = auto-detect (executable on PATH: sandy → tmux → $SHELL). Example: \"tmux new-session -A -s sandy-spike\" or \"/bin/bash -l\"."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "npm run copy-xterm && tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "copy-xterm": "node scripts/copy-xterm.js",
+    "vscode:prepublish": "npm run compile"
+  },
+  "dependencies": {
+    "node-pty": "^1.0.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.4",
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-web-links": "^0.11.0",
+    "@xterm/xterm": "^5.5.0",
+    "electron": "^41.3.0",
+    "typescript": "^5.4.0"
+  }
+}
