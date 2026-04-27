@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "sandy_version": "0.12.0-spike-mock",
+  "sandy_version": "0.12.0-mock",
   "fields": [
     {
       "key": "SANDY_AGENT",
@@ -8,61 +8,234 @@
       "tier": "home",
       "options": ["claude", "codex", "gemini"],
       "default": "claude",
-      "description": "Which AI agent(s) to launch. Multi-select serializes as comma-separated."
+      "description": "AI agent(s) to run. Single or multiple (comma-separated)."
     },
     {
       "key": "SANDY_MODEL",
       "type": "string",
       "tier": "home",
-      "pattern": "^[a-z0-9._-]+$",
-      "default": "claude-opus-4-7",
-      "description": "Default model name passed to the agent."
+      "default": "claude-opus-4-6",
+      "description": "Claude model override for sessions."
     },
     {
-      "key": "SANDY_TIMEOUT_SECS",
+      "key": "SANDY_GEMINI_AUTH",
+      "type": "enum",
+      "tier": "home",
+      "options": ["auto", "api_key", "oauth", "adc"],
+      "default": "auto",
+      "description": "Force Gemini auth path."
+    },
+    {
+      "key": "SANDY_GEMINI_EXTENSIONS",
+      "type": "string",
+      "tier": "home",
+      "description": "Comma-separated Gemini extension URLs/paths for first-launch install."
+    },
+    {
+      "key": "SANDY_CODEX_AUTH",
+      "type": "enum",
+      "tier": "home",
+      "options": ["auto", "api_key", "oauth"],
+      "default": "auto",
+      "description": "Force Codex auth path."
+    },
+    {
+      "key": "SANDY_CHANNEL_TARGET_PANE",
       "type": "int",
       "tier": "home",
-      "min": 30,
-      "max": 86400,
-      "default": 3600,
-      "description": "Per-session timeout before sandy auto-stops the container."
+      "min": 0,
+      "default": 0,
+      "description": "Tmux pane target for multi-agent Telegram relay (0 = first agent)."
     },
     {
       "key": "SANDY_SSH",
       "type": "enum",
       "tier": "home",
-      "options": ["agent", "token", "off"],
-      "default": "agent",
-      "description": "How sandy provides SSH access inside the container."
-    },
-    {
-      "key": "SANDY_TELEMETRY",
-      "type": "bool",
-      "tier": "home",
-      "default": false,
-      "description": "Opt in to anonymous usage telemetry."
-    },
-    {
-      "key": "ANTHROPIC_API_KEY",
-      "type": "secret",
-      "tier": "secrets",
-      "description": "Claude API key (written to ~/.sandy/.secrets, not the config file)."
+      "options": ["token", "agent"],
+      "default": "token",
+      "description": "Git auth method: token (gh CLI + HTTPS) or agent (SSH forwarding)."
     },
     {
       "key": "SANDY_SKIP_PERMISSIONS",
       "type": "bool",
-      "tier": "workspace",
+      "tier": "home",
       "privileged": true,
-      "default": false,
-      "description": "Skip in-container permission checks. Privileged — requires explicit approval per workspace."
+      "default": true,
+      "description": "Disable Claude Code's permission system inside the container. Security-sensitive."
+    },
+    {
+      "key": "SANDY_HOME",
+      "type": "string",
+      "tier": "home",
+      "default": "~/.sandy",
+      "description": "Sandy config/build/sandbox directory location."
+    },
+    {
+      "key": "SANDY_CPUS",
+      "type": "int",
+      "tier": "home",
+      "min": 1,
+      "description": "CPU limit for the sandy container. Empty = auto-detect."
+    },
+    {
+      "key": "SANDY_MEM",
+      "type": "string",
+      "tier": "home",
+      "pattern": "^[0-9]+[kmgKMG]?$",
+      "description": "Memory limit for the sandy container (e.g. 4g, 2048m). Empty = auto-detect."
     },
     {
       "key": "SANDY_ALLOW_LAN_HOSTS",
       "type": "string",
       "tier": "workspace",
       "privileged": true,
-      "pattern": "^([0-9./,:a-fA-F]+|)$",
-      "description": "Comma-separated CIDR list of LAN hosts the container can reach. Privileged."
+      "description": "Comma-separated IPs/CIDRs to exempt from LAN isolation (e.g. 192.168.1.50). Security-sensitive."
+    },
+    {
+      "key": "SANDY_ALLOW_NO_ISOLATION",
+      "type": "bool",
+      "tier": "workspace",
+      "privileged": true,
+      "default": false,
+      "description": "Allow launch without iptables rules on Linux. Security-sensitive."
+    },
+    {
+      "key": "SANDY_SKILL_PACKS",
+      "type": "string",
+      "tier": "home",
+      "description": "Comma-separated skill packs to install as cached Docker layers (e.g. gstack)."
+    },
+    {
+      "key": "SANDY_GPU",
+      "type": "string",
+      "tier": "home",
+      "description": "GPU passthrough: 'all', or device IDs like '0' or '0,1'. Empty = disabled."
+    },
+    {
+      "key": "SANDY_CHANNELS",
+      "type": "string",
+      "tier": "home",
+      "description": "Space-separated channel plugins to enable (e.g. plugin:telegram@v1)."
+    },
+    {
+      "key": "SANDY_VENV_OVERLAY",
+      "type": "bool",
+      "tier": "home",
+      "default": true,
+      "description": "Shadow host .venv with sandbox-owned overlay (true) or raw bind (false)."
+    },
+    {
+      "key": "SANDY_ALLOW_WORKFLOW_EDIT",
+      "type": "bool",
+      "tier": "workspace",
+      "privileged": true,
+      "default": false,
+      "description": "Allow Claude to edit .github/workflows/ (normally read-only). Privileged."
+    },
+
+    {
+      "key": "ANTHROPIC_API_KEY",
+      "type": "secret",
+      "tier": "secrets",
+      "description": "Anthropic API key. Unnecessary with Claude Pro/Max OAuth login."
+    },
+    {
+      "key": "CLAUDE_CODE_OAUTH_TOKEN",
+      "type": "secret",
+      "tier": "secrets",
+      "description": "Long-lived token from `claude setup-token` for headless servers."
+    },
+    {
+      "key": "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+      "type": "int",
+      "tier": "home",
+      "min": 1024,
+      "max": 200000,
+      "default": 128000,
+      "description": "Max output tokens per Claude Code response."
+    },
+    {
+      "key": "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
+      "type": "bool",
+      "tier": "home",
+      "default": false,
+      "description": "Enable experimental Claude Code agent teams."
+    },
+
+    {
+      "key": "GEMINI_API_KEY",
+      "type": "secret",
+      "tier": "secrets",
+      "description": "Google API key for Gemini CLI."
+    },
+    {
+      "key": "GEMINI_MODEL",
+      "type": "string",
+      "tier": "home",
+      "description": "Gemini model override."
+    },
+    {
+      "key": "GOOGLE_CLOUD_PROJECT",
+      "type": "string",
+      "tier": "home",
+      "description": "GCP project ID for Vertex AI routing."
+    },
+    {
+      "key": "GOOGLE_CLOUD_LOCATION",
+      "type": "string",
+      "tier": "home",
+      "description": "GCP region for Vertex AI routing (e.g. us-central1)."
+    },
+    {
+      "key": "GOOGLE_GENAI_USE_VERTEXAI",
+      "type": "bool",
+      "tier": "home",
+      "default": false,
+      "description": "Route Gemini through Vertex AI when true."
+    },
+
+    {
+      "key": "CODEX_API_KEY",
+      "type": "secret",
+      "tier": "secrets",
+      "description": "OpenAI API key for Codex CLI."
+    },
+    {
+      "key": "OPENAI_API_KEY",
+      "type": "secret",
+      "tier": "secrets",
+      "description": "Alias for CODEX_API_KEY (auto-aliased when SANDY_AGENT=codex)."
+    },
+    {
+      "key": "CODEX_MODEL",
+      "type": "string",
+      "tier": "home",
+      "description": "Codex model override."
+    },
+
+    {
+      "key": "TELEGRAM_BOT_TOKEN",
+      "type": "secret",
+      "tier": "secrets",
+      "description": "Telegram bot token from BotFather."
+    },
+    {
+      "key": "TELEGRAM_ALLOWED_SENDERS",
+      "type": "string",
+      "tier": "home",
+      "description": "Comma-separated Telegram user IDs allowed to message the bot."
+    },
+    {
+      "key": "DISCORD_BOT_TOKEN",
+      "type": "secret",
+      "tier": "secrets",
+      "description": "Discord bot token."
+    },
+    {
+      "key": "DISCORD_ALLOWED_SENDERS",
+      "type": "string",
+      "tier": "home",
+      "description": "Comma-separated Discord user IDs allowed to message the bot."
     }
   ]
 }

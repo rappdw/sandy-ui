@@ -196,8 +196,11 @@ type ToHost =
     const form = $("form");
     form.replaceChildren();
     for (const f of schema.fields) {
-      // Privileged keys still only make sense in workspace scope.
-      if (activeScope === "home" && f.privileged) continue;
+      // Show every field in both scopes. Privileged keys saved in workspace
+      // scope trigger the passive-privileged approval flow on next launch;
+      // privileged keys saved in home scope are user-set so no approval is
+      // needed. The yellow border + workspace-tab warning banner do the
+      // visual differentiation.
       form.appendChild(renderField(f, s.form[f.key] ?? (f.default as string | undefined), s.secretsPresent));
     }
     bindFormChanges();
