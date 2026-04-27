@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { deleteSandboxDir } from "../src/state/deleteSandbox";
+import { deleteSandboxDir, removeLockForSandbox, lockPathForSandbox } from "../src/state/deleteSandbox";
 
 let tmp: string;
 let sandboxesRoot: string;
@@ -92,5 +92,55 @@ describe("deleteSandboxDir — input validation", () => {
     const result = deleteSandboxDir(ghost, sandboxesRoot);
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/does not exist/);
+  });
+});
+
+describe("lockPathForSandbox", () => {
+  it("constructs the canonical .<name>.lock path under sandboxesRoot", () => {
+    expect(lockPathForSandbox("myproj-abc12345", sandboxesRoot)).toBe(
+      path.join(sandboxesRoot, ".myproj-abc12345.lock"),
+    );
+  });
+});
+
+describe("removeLockForSandbox", () => {
+  it("removes a file-format lock", () => {
+    const lockPath = path.join(sandboxesRoot, ".myws-aaa.lock");
+    fs.writeFileSync(lockPath, String(process.pid));
+    const result = removeLockForSandbox("myws-aaa", sandboxesRoot);
+    expect(result.ok).toBe(true);
+    expect(result.removedPath).toBe(path.resolve(lockPath));
+    expect(fs.existsSync(lockPath)).toBe(false);
+  });
+
+  it("removes a directory-format lock", () => {
+    const lockPath = path.join(sandboxesRoot, ".myws-bbb.lock");
+    fs.mkdirSync(lockPath);
+    fs.writeFileSync(path.join(lockPath, "pid"), String(process.pid));
+    const result = removeLockForSandbox("myws-bbb", sandboxesRoot);
+    expect(result.ok).toBe(true);
+    expect(fs.existsSync(lockPath)).toBe(false);
+  });
+
+  it("returns error for empty sandbox name", () => {
+    const result = removeLockForSandbox("", sandboxesRoot);
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/no sandbox name/);
+  });
+
+  it("returns error when no lock file exists", () => {
+    const result = removeLockForSandbox("nonexistent-sandbox", sandboxesRoot);
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/does not exist/);
+  });
+
+  it("does not touch the sandbox dir, only the lock file", () => {
+    const sandboxDir = writeSandbox("preserve-me");
+    const lockPath = path.join(sandboxesRoot, ".preserve-me.lock");
+    fs.writeFileSync(lockPath, "12345");
+    const result = removeLockForSandbox("preserve-me", sandboxesRoot);
+    expect(result.ok).toBe(true);
+    expect(fs.existsSync(lockPath)).toBe(false);
+    expect(fs.existsSync(sandboxDir)).toBe(true);  // sandbox itself untouched
   });
 });

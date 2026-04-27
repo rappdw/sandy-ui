@@ -29,6 +29,7 @@
       { "command": "sandy.tree.openWorkspaceNewWin",  "title": "Open Workspace in New Window" },
       { "command": "sandy.tree.revealSandbox",        "title": "Reveal Sandbox in File Manager" },
       { "command": "sandy.tree.copyWorkspacePath",    "title": "Copy Workspace Path" },
+      { "command": "sandy.tree.removeLock",           "title": "Remove Lock…" },
       { "command": "sandy.tree.deleteSandbox",        "title": "Delete Sandbox…" }
     ],
     "menus": {
@@ -41,6 +42,7 @@
         { "command": "sandy.tree.openWorkspaceNewWin", "when": "view == sandy.projects && viewItem =~ /^sandbox\\./", "group": "2_open@2" },
         { "command": "sandy.tree.revealSandbox",       "when": "view == sandy.projects && viewItem =~ /^sandbox\\./", "group": "3_reveal@1" },
         { "command": "sandy.tree.copyWorkspacePath",   "when": "view == sandy.projects && viewItem =~ /^sandbox\\./", "group": "3_reveal@2" },
+        { "command": "sandy.tree.removeLock",          "when": "view == sandy.projects && viewItem == sandbox.locked", "group": "8_unstick@1" },
         { "command": "sandy.tree.deleteSandbox",       "when": "view == sandy.projects && viewItem =~ /^sandbox\\./", "group": "9_destructive@1" }
       ]
     },

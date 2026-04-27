@@ -1,11 +1,11 @@
-// Delete a sandbox directory from disk. Safety-first:
-// - Path must be a sub-path of ~/.sandy/sandboxes/ (defends against any
-//   bug that could pass a wild path — never blindly rm -rf an arbitrary
-//   string).
-// - The actual deletion call is wrapped in try/catch so a failed rmSync
-//   bubbles out as a typed error.
-// - Caller is responsible for the user-facing confirmation modal AND for
-//   refusing to delete running sandboxes (we have no way to stop a
+// Filesystem mutations on sandboxes. Safety-first:
+// - Every path must be a sub-path of ~/.sandy/sandboxes/ (defends against
+//   any bug that could pass a wild path — never blindly rm -rf an
+//   arbitrary string).
+// - The actual deletion calls are wrapped in try/catch so failures bubble
+//   out as typed errors.
+// - Callers are responsible for user-facing confirmation modals AND for
+//   refusing to act on running sandboxes (we have no way to stop a
 //   container from here without invoking sandy/docker).
 
 import * as fs from "fs";
@@ -20,24 +20,41 @@ export interface DeleteResult {
   removedPath?: string;
 }
 
+// Lock filename convention sandy uses: ~/.sandy/sandboxes/.<sandbox-name>.lock
+// (file OR directory; this function rm -rf's either).
+export function lockPathForSandbox(sandboxName: string, sandboxesRoot: string = SANDBOXES_ROOT): string {
+  return path.join(sandboxesRoot, `.${sandboxName}.lock`);
+}
+
+export function removeLockForSandbox(sandboxName: string, sandboxesRoot: string = SANDBOXES_ROOT): DeleteResult {
+  if (!sandboxName) return { ok: false, error: "no sandbox name provided" };
+  const lockPath = lockPathForSandbox(sandboxName, sandboxesRoot);
+  return removePathInsideRoot(lockPath, sandboxesRoot, "lock");
+}
+
 export function deleteSandboxDir(sandboxPath: string, sandboxesRoot: string = SANDBOXES_ROOT): DeleteResult {
-  if (!sandboxPath) return { ok: false, error: "no path provided" };
+  return removePathInsideRoot(sandboxPath, sandboxesRoot, "sandbox dir");
+}
+
+// Shared safety-checked rm. The `kind` label is for error messages only.
+function removePathInsideRoot(targetPath: string, rootPath: string, kind: string): DeleteResult {
+  if (!targetPath) return { ok: false, error: `no path provided for ${kind}` };
 
   // Normalize both paths and verify containment. resolve() collapses .. and
   // symbolic moves; the check below catches "../../../tmp" attacks and
-  // anything outside ~/.sandy/sandboxes/.
-  const resolved   = path.resolve(sandboxPath);
-  const rootResolved = path.resolve(sandboxesRoot);
+  // anything outside the allowed root.
+  const resolved   = path.resolve(targetPath);
+  const rootResolved = path.resolve(rootPath);
   const rel = path.relative(rootResolved, resolved);
   if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) {
     return {
       ok: false,
-      error: `refusing to delete: path "${sandboxPath}" is not under ${sandboxesRoot}`,
+      error: `refusing to delete ${kind}: path "${targetPath}" is not under ${rootPath}`,
     };
   }
 
   if (!fs.existsSync(resolved)) {
-    return { ok: false, error: `path does not exist: ${resolved}` };
+    return { ok: false, error: `${kind} does not exist: ${resolved}` };
   }
 
   try {
