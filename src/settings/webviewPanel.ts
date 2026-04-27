@@ -1,6 +1,5 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
-import * as path from "path";
 import {
   Schema, Scope,
   readKv, saveScope,
@@ -8,6 +7,11 @@ import {
   workspaceConfigPath, workspaceSecretsPath,
   secretsPathFor,
 } from "./configIO";
+// Schema mock is bundled at compile time via resolveJsonModule. No runtime
+// file lookup — works whether running from src/ during F5 dev or from the
+// installed vsix where src/ doesn't exist. Will be replaced by a `sandy
+// --print-schema` invocation in 0.1.0.
+import schemaMock from "../mocks/schema.json";
 
 const out = vscode.window.createOutputChannel("Sandy Settings");
 const log = (msg: string) => out.appendLine(`[${new Date().toISOString()}] ${msg}`);
@@ -32,11 +36,7 @@ export function openSettingsPanel(ctx: vscode.ExtensionContext) {
     css:       mediaUri("settings.css"),
   });
 
-  const schemaPath = path.join(ctx.extensionPath, "out", "mocks", "schema.json");
-  const schemaSrc = fs.existsSync(schemaPath)
-    ? fs.readFileSync(schemaPath, "utf8")
-    : fs.readFileSync(path.join(ctx.extensionPath, "src", "mocks", "schema.json"), "utf8");
-  const schema = JSON.parse(schemaSrc) as Schema;
+  const schema = schemaMock as Schema;
   out.show(true);
 
   const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
