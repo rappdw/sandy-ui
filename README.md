@@ -21,6 +21,18 @@ VSCode extension that wraps the [sandy](https://github.com/rappdw/sandy) CLI —
 - Docker running (for sandy itself; the extension does not require it)
 - `sandy` on PATH (or `tmux` as a stand-in for testing without sandy)
 
+## Install (latest release)
+
+<!-- VERSION-PIN: update this URL whenever package.json version is bumped (see CLAUDE.md > "On every release") -->
+
+```bash
+curl -L https://github.com/rappdw/sandy-ui/releases/download/v0.0.1/sandy-ui-0.0.1.vsix -o /tmp/sandy.vsix \
+  && code --install-extension /tmp/sandy.vsix
+# Then: Cmd+Shift+P → "Developer: Reload Window" in any open VSCode window
+```
+
+The `.vsix` ships node-pty built against the publishing machine's Electron ABI. If you're on a different Electron major (e.g., much newer or older VSCode), you'll see `posix_spawnp failed.` on first launch — clone and build from source instead (next section).
+
 ## Build & run from source
 
 ```bash

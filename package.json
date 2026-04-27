@@ -59,10 +59,13 @@
     }
   },
   "scripts": {
-    "compile": "npm run copy-xterm && tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "copy-xterm": "node scripts/copy-xterm.js",
-    "vscode:prepublish": "npm run compile"
+    "compile":           "npm run copy-xterm && tsc -p ./",
+    "watch":             "tsc -watch -p ./",
+    "copy-xterm":        "node scripts/copy-xterm.js",
+    "vscode:prepublish": "npm run compile",
+    "package-vsix":      "vsce package",
+    "install-vsix":      "npm run package-vsix && code --install-extension \"$(ls -t *.vsix | head -1)\" --force",
+    "release":           "npm run package-vsix && gh release create v$npm_package_version sandy-ui-$npm_package_version.vsix --title v$npm_package_version --generate-notes"
   },
   "dependencies": {
     "node-pty": "^1.0.0"
@@ -71,6 +74,7 @@
     "@electron/rebuild": "^4.0.4",
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
