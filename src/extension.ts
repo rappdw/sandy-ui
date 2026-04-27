@@ -7,6 +7,7 @@ import { openApprovalWebview } from "./approval/webviewModal";
 import { openSettingsPanel } from "./settings/webviewPanel";
 import { ProjectsTreeProvider } from "./projectsTree";
 import { StatePoller } from "./state/poller";
+import { deleteSandboxDir } from "./state/deleteSandbox";
 
 export function activate(ctx: vscode.ExtensionContext) {
   const stateOut = vscode.window.createOutputChannel("Sandy State");
@@ -57,6 +58,48 @@ export function activate(ctx: vscode.ExtensionContext) {
       if (!ws) return vscode.window.showWarningMessage("No workspace_path on this sandbox.");
       await vscode.env.clipboard.writeText(ws);
       vscode.window.setStatusBarMessage(`Copied: ${ws}`, 3000);
+    }),
+    vscode.commands.registerCommand("sandy.tree.deleteSandbox", async (node: any) => {
+      const sb = node?.sandbox;
+      if (!sb?.path) return vscode.window.showWarningMessage("Sandy: no sandbox path on this entry — nothing to delete.");
+
+      // Refuse to delete a running sandbox — the container would orphan and
+      // the next launch would fail. Force the user to stop it first.
+      const cur = poller.current();
+      const isRunning = !!cur.state?.running_containers?.some(c => c.sandbox === sb.name);
+      if (isRunning) {
+        vscode.window.showErrorMessage(
+          `Sandy: sandbox "${sb.name}" is currently running. Stop sandy in this workspace first, then try Delete again.`
+        );
+        return;
+      }
+
+      // Modal confirmation. detail field carries the full path so the user
+      // sees exactly what's about to be removed; "Delete" is the only action
+      // — Cancel is the default (Esc / click outside).
+      const choice = await vscode.window.showWarningMessage(
+        `Delete sandbox "${sb.name}"?`,
+        {
+          modal: true,
+          detail:
+            `This permanently removes the sandbox directory:\n` +
+            `  ${sb.path}\n\n` +
+            `Workspace folder is NOT touched: ${sb.workspace_path ?? "(unknown)"}\n\n` +
+            `If sandy left Docker resources behind (network, image), they are NOT cleaned by this action — run \`docker system prune\` separately if needed.\n\n` +
+            `This cannot be undone.`,
+        },
+        "Delete"
+      );
+      if (choice !== "Delete") return;
+
+      const result = deleteSandboxDir(sb.path);
+      if (result.ok) {
+        vscode.window.setStatusBarMessage(`Deleted sandbox: ${sb.name}`, 5000);
+        stateOut.appendLine(`[${new Date().toISOString()}] deleted sandbox: ${result.removedPath}`);
+        void poller.refresh();
+      } else {
+        vscode.window.showErrorMessage(`Sandy: delete failed — ${result.error}`);
+      }
     }),
   );
 }

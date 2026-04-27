@@ -28,7 +28,8 @@
       { "command": "sandy.tree.openWorkspace",        "title": "Open Workspace Folder…" },
       { "command": "sandy.tree.openWorkspaceNewWin",  "title": "Open Workspace in New Window" },
       { "command": "sandy.tree.revealSandbox",        "title": "Reveal Sandbox in File Manager" },
-      { "command": "sandy.tree.copyWorkspacePath",    "title": "Copy Workspace Path" }
+      { "command": "sandy.tree.copyWorkspacePath",    "title": "Copy Workspace Path" },
+      { "command": "sandy.tree.deleteSandbox",        "title": "Delete Sandbox…" }
     ],
     "menus": {
       "view/title": [
@@ -39,7 +40,8 @@
         { "command": "sandy.tree.openWorkspace",       "when": "view == sandy.projects && viewItem =~ /^sandbox\\./", "group": "2_open@1" },
         { "command": "sandy.tree.openWorkspaceNewWin", "when": "view == sandy.projects && viewItem =~ /^sandbox\\./", "group": "2_open@2" },
         { "command": "sandy.tree.revealSandbox",       "when": "view == sandy.projects && viewItem =~ /^sandbox\\./", "group": "3_reveal@1" },
-        { "command": "sandy.tree.copyWorkspacePath",   "when": "view == sandy.projects && viewItem =~ /^sandbox\\./", "group": "3_reveal@2" }
+        { "command": "sandy.tree.copyWorkspacePath",   "when": "view == sandy.projects && viewItem =~ /^sandbox\\./", "group": "3_reveal@2" },
+        { "command": "sandy.tree.deleteSandbox",       "when": "view == sandy.projects && viewItem =~ /^sandbox\\./", "group": "9_destructive@1" }
       ]
     },
     "viewsContainers": {

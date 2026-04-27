@@ -68,6 +68,18 @@ Errors from `--validate-config` are logged but **never block the launch** — sa
 
 `Sandy: Refresh State` command (palette + tree title-bar icon) forces an out-of-cycle poll.
 
+## Sandbox deletion
+
+`src/state/deleteSandbox.ts` (`deleteSandboxDir`) provides safe filesystem removal of a sandbox dir. **Three safety layers** because `rm -rf` on a wild path is catastrophic:
+
+1. Path is `path.resolve()`d and the relative result against `sandboxesRoot` (default `~/.sandy/sandboxes/`) must not be empty, start with `..`, or be absolute. This rejects `/`, the root itself, parent-traversal escapes, and anything outside the sandbox tree.
+2. Existence check before rm.
+3. Wrapped in try/catch; never throws.
+
+Caller (`sandy.tree.deleteSandbox` in extension.ts) is responsible for the **modal confirmation** (`showWarningMessage` with `modal: true`) and for **refusing-to-delete-running-sandboxes** (consults `poller.current().state.running_containers`). The delete function itself doesn't know about the running state — it just removes the dir.
+
+Docker resources (network, container, image layers) are NOT cleaned by this — sandy's own teardown (or a `docker system prune`) handles those.
+
 ## Schema source
 
 `src/schema/cache.ts` invokes `sandy --print-schema`, parses the JSON, and caches the result in `globalStorageUri/schema-cache.json`. The cache is keyed by `sandy --version` output — when sandy upgrades, the next `getCachedSchema` call detects the version mismatch and refetches. Cache writes are atomic (temp + rename); cache write failures are non-fatal (always returns a usable schema).
