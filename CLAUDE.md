@@ -68,6 +68,17 @@ Errors from `--validate-config` are logged but **never block the launch** — sa
 
 `Sandy: Refresh State` command (palette + tree title-bar icon) forces an out-of-cycle poll.
 
+## Sandy binary resolution
+
+`src/state/sandyPath.ts` (`resolveSandyBinary`) is the single source of truth for "where is sandy" across all callers (poller, schema cache, validate, terminal launch). Resolution order:
+1. `sandy.binaryPath` config setting (user-explicit override)
+2. PATH lookup
+3. Common install locations: `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, `~/bin`, `/usr/bin`
+
+The "common install locations" fallback exists because **VSCode launched from the Dock on macOS has a narrower PATH** (typically `/usr/bin:/bin` only — no Homebrew, no `~/.local/bin`) than the user's interactive shell. Without this fallback, sandy-ui would show "sandy unavailable" on every dock-launched VSCode session even when sandy is installed.
+
+The resolved path is cached per-process. `invalidateSandyPathCache()` is wired to fire on `sandy.binaryPath` setting change so users don't have to reload to apply a new override. Override reader is dependency-injected (`setOverrideReaderForTests`) so unit tests don't need vscode mocked.
+
 ## Activation strategy
 
 `activationEvents: ["onStartupFinished"]`. Eager activation after VSCode startup is required so `resumePendingLaunchIfAny` runs even when the user doesn't click the Sandy activity bar. The trade-off: the StatePoller starts on every VSCode window (one `sandy --print-state` invocation every 5s, even in workspaces where the user isn't using sandy). Acceptable for now; revisit if the polling cost becomes annoying — could gate polling on the projects view actually being visible via `onDidChangeVisibility`.

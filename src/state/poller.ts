@@ -2,6 +2,7 @@ import * as cp from "child_process";
 import * as vscode from "vscode";
 import type { SandyState } from "./types";
 import { enrichWithWorkspaceJson } from "./enrich";
+import { resolveSandyBinary } from "./sandyPath";
 
 // Polls `sandy --print-state` on a fixed cadence; emits change events when
 // the state JSON differs from the previous poll. Tree provider subscribes
@@ -55,7 +56,15 @@ export class StatePoller implements vscode.Disposable {
 
   private invoke(): Promise<StateResolution> {
     return new Promise<StateResolution>((resolve) => {
-      cp.execFile("sandy", ["--print-state"], {
+      const sandyBin = resolveSandyBinary();
+      if (!sandyBin) {
+        const fetched_at = new Date();
+        const msg = "sandy not found (PATH or common install locations); set sandy.binaryPath in settings if installed elsewhere";
+        this.out?.appendLine(`[${fetched_at.toISOString()}] state poll: ${msg}`);
+        resolve({ error: msg, fetched_at });
+        return;
+      }
+      cp.execFile(sandyBin, ["--print-state"], {
         encoding: "utf8",
         timeout: 10_000,
         maxBuffer: 10 * 1024 * 1024,
@@ -63,7 +72,7 @@ export class StatePoller implements vscode.Disposable {
         const fetched_at = new Date();
         if (err) {
           const msg = (err as NodeJS.ErrnoException).code === "ENOENT"
-            ? "sandy not on PATH"
+            ? `sandy binary missing at ${sandyBin}`
             : (err.message || String(err));
           this.out?.appendLine(`[${fetched_at.toISOString()}] state poll failed: ${msg}`);
           resolve({ error: msg, fetched_at });

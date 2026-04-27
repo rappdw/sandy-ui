@@ -8,6 +8,7 @@ import { openSettingsPanel } from "./settings/webviewPanel";
 import { ProjectsTreeProvider } from "./projectsTree";
 import { StatePoller } from "./state/poller";
 import { deleteSandboxDir, removeLockForSandbox, lockPathForSandbox } from "./state/deleteSandbox";
+import { invalidateSandyPathCache } from "./state/sandyPath";
 
 export function activate(ctx: vscode.ExtensionContext) {
   const stateOut = vscode.window.createOutputChannel("Sandy State");
@@ -26,6 +27,14 @@ export function activate(ctx: vscode.ExtensionContext) {
     poller,
     projects,
     stateOut,
+    // If the user updates sandy.binaryPath at runtime, invalidate the
+    // resolver cache and trigger a state refresh so the new value is used.
+    vscode.workspace.onDidChangeConfiguration(e => {
+      if (e.affectsConfiguration("sandy.binaryPath")) {
+        invalidateSandyPathCache();
+        void poller.refresh();
+      }
+    }),
     vscode.window.registerTreeDataProvider("sandy.projects", projects),
 
     // Palette + tree-default-click. If the target workspace differs from the

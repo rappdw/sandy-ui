@@ -1,5 +1,6 @@
 import * as cp from "child_process";
 import * as fs from "fs";
+import { resolveSandyBinary } from "../state/sandyPath";
 
 // `sandy --validate-config PATH` JSON shape per SPEC_INTROSPECTION.md.
 // Optional fields wherever the spec allows additive change.
@@ -41,7 +42,12 @@ export function validateConfig(configPath: string): Promise<ValidateResolution> 
       resolve({ result: { schema_version: 1, approval_status: "none_required" } });
       return;
     }
-    cp.execFile("sandy", ["--validate-config", configPath], {
+    const sandyBin = resolveSandyBinary();
+    if (!sandyBin) {
+      resolve({ error: "sandy not found (PATH or common install locations); set sandy.binaryPath in settings" });
+      return;
+    }
+    cp.execFile(sandyBin, ["--validate-config", configPath], {
       encoding: "utf8",
       timeout: 10_000,
       maxBuffer: 10 * 1024 * 1024,

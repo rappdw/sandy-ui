@@ -66,10 +66,15 @@
     "configuration": {
       "title": "Sandy",
       "properties": {
+        "sandy.binaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the sandy binary. Empty = auto-detect (PATH lookup, then common install locations: /opt/homebrew/bin, /usr/local/bin, ~/.local/bin, ~/bin). Set this if VSCode launched-from-Dock can't find sandy on its narrower PATH."
+        },
         "sandy.launchCommand": {
           "type": "string",
           "default": "",
-          "description": "Override the launch command. Empty = auto-detect (executable on PATH: sandy → tmux → $SHELL). Example: \"tmux new-session -A -s sandy-spike\" or \"/bin/bash -l\"."
+          "description": "Override the launch command. Empty = auto-detect (sandy → tmux → $SHELL). Example: \"tmux new-session -A -s sandy-spike\" or \"/bin/bash -l\"."
         },
         "sandy.launch.closeBottomPanel": {
           "type": "boolean",

@@ -4,6 +4,7 @@ import * as path from "path";
 import type { Schema } from "../settings/configIO";
 import type { SandySchema } from "./types";
 import { parseSandySchema } from "./parse";
+import { resolveSandyBinary } from "../state/sandyPath";
 
 // Cache file lives in the extension's globalStorageUri.
 // Layout:
@@ -94,8 +95,10 @@ export function refreshSchema(globalStorageDir: string, fallbackMock: Schema, sa
 // --- internals -------------------------------------------------------------
 
 function trySandyVersion(): string | undefined {
+  const sandyBin = resolveSandyBinary();
+  if (!sandyBin) return undefined;
   try {
-    const out = cp.execFileSync("sandy", ["--version"], {
+    const out = cp.execFileSync(sandyBin, ["--version"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 5_000,
@@ -108,7 +111,9 @@ function trySandyVersion(): string | undefined {
 }
 
 function invokeSandyPrintSchema(): SandySchema {
-  const out = cp.execFileSync("sandy", ["--print-schema"], {
+  const sandyBin = resolveSandyBinary();
+  if (!sandyBin) throw new Error("sandy not found");
+  const out = cp.execFileSync(sandyBin, ["--print-schema"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     timeout: 10_000,

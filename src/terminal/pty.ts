@@ -72,7 +72,14 @@ export function launchCandidates(): { command: string; args: string[] }[] {
   };
 
   const out: { command: string; args: string[] }[] = [];
-  const sandy = findExecutable("sandy");
+  // Use the same resolver as state polling — handles dock-launched VSCode
+  // where PATH is narrower than the user's interactive shell.
+  // Imported lazily here to keep this module independent of vscode for tests.
+  let sandyResolved: string | undefined;
+  try {
+    sandyResolved = (require("../state/sandyPath") as typeof import("../state/sandyPath")).resolveSandyBinary();
+  } catch { /* vscode not available (running outside extension host) — fall through to PATH */ }
+  const sandy = sandyResolved ?? findExecutable("sandy");
   if (sandy) out.push({ command: sandy, args: [] });
   const tmux  = findExecutable("tmux");
   if (tmux)  out.push({ command: tmux,  args: ["new-session", "-A", "-s", "sandy-spike"] });
