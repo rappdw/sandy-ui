@@ -28,7 +28,7 @@ export function openSettingsPanel(ctx: vscode.ExtensionContext) {
     panel.webview.asWebviewUri(vscode.Uri.joinPath(ctx.extensionUri, "media", "settings", sub));
   panel.webview.html = renderHtml({
     cspSource: panel.webview.cspSource,
-    js:        mediaUri("settings.js"),
+    js:        mediaUri("dist/settings.js"),
     css:       mediaUri("settings.css"),
   });
 

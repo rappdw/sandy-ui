@@ -1,59 +1,129 @@
+// Webview-side settings form. Project (workspace) and Global (home) scope
+// tabs, schema-driven form fields, scope-aware secrets, persists in-progress
+// edits per-scope across hide/show via VSCode webview state.
+//
+// Mirror the host-side message contracts in src/settings/webviewPanel.ts.
+// Kept structural (no shared file) — host is Node, webview is browser.
+
+export {}; // mark as module so local types don't leak into global scope
+
+type Scope = "home" | "workspace";
+
+interface FieldDef {
+  key: string;
+  type: "string" | "int" | "bool" | "enum" | "agent_combo" | "secret";
+  tier: "home" | "workspace" | "secrets";
+  privileged?: boolean;
+  pattern?: string;
+  min?: number;
+  max?: number;
+  options?: string[];
+  default?: unknown;
+  description?: string;
+}
+
+interface Schema {
+  schema_version: number;
+  sandy_version: string;
+  fields: FieldDef[];
+}
+
+interface ScopeState {
+  configPath: string;
+  secretsPath: string;
+  values: Record<string, string>;
+  initial: Record<string, string>;
+  form: Record<string, string>;
+  secretsPresent: Record<string, boolean>;
+  exists: boolean;
+  available: boolean;
+}
+
+interface PersistedState {
+  schema: Schema | null;
+  activeScope: Scope;
+  scopes: { home: ScopeState; workspace: ScopeState };
+}
+
+type FromHost =
+  | { type: "schema"; schema: Schema; scopes: { home: ScopeFromHost; workspace: ScopeFromHost | null } }
+  | { type: "saved"; scope: Scope };
+
+interface ScopeFromHost {
+  configPath: string;
+  secretsPath: string;
+  values: Record<string, string>;
+  exists: boolean;
+  secretsPresent: Record<string, boolean>;
+}
+
+type ToHost =
+  | { type: "ready" }
+  | { type: "save"; scope: Scope; values: Record<string, string> }
+  | { type: "log"; level: "info" | "error"; msg: string };
+
 (() => {
   "use strict";
   const vscode = acquireVsCodeApi();
-  const $ = (id) => document.getElementById(id);
+  const $ = (id: string): HTMLElement => {
+    const el = document.getElementById(id);
+    if (!el) throw new Error(`element #${id} missing from settings webview HTML`);
+    return el;
+  };
 
   // Surface webview-side errors to the host's Sandy Settings output channel.
-  // Without this, `saveState()` and friends throw silently and the form just
-  // appears empty / clicks appear inert.
-  const log  = (msg) => { try { vscode.postMessage({ type: "log", level: "info",  msg: String(msg) }); } catch {} };
-  const fail = (where, e) => { try { vscode.postMessage({ type: "log", level: "error", msg: `${where}: ${e?.message ?? e}\n${e?.stack ?? ""}` }); } catch {} };
+  const log = (msg: string): void => {
+    try { vscode.postMessage({ type: "log", level: "info", msg } satisfies ToHost); }
+    catch { /* swallow */ }
+  };
+  const fail = (where: string, e: unknown): void => {
+    const err = e as { message?: string; stack?: string } | undefined;
+    const msg = `${where}: ${err?.message ?? String(e)}\n${err?.stack ?? ""}`;
+    try { vscode.postMessage({ type: "log", level: "error", msg } satisfies ToHost); }
+    catch { /* swallow */ }
+  };
+  void log; // referenced indirectly via fail; silence unused-var warning
   window.addEventListener("error", (ev) => fail("window.error", ev.error || ev.message));
   window.addEventListener("unhandledrejection", (ev) => fail("unhandledrejection", ev.reason));
 
-  // Per-scope state. Each scope tracks its own config + secrets independently
-  // so switching tabs doesn't lose in-progress edits in the other scope.
-  let schema = null;
-  let activeScope = "workspace";  // default to project; falls back to home if no workspace open
-  const scopes = {
-    home: {
-      configPath: "", secretsPath: "",
-      values: {}, initial: {}, form: {},
-      secretsPresent: {},
-      exists: false, available: true,
-    },
-    workspace: {
-      configPath: "", secretsPath: "",
-      values: {}, initial: {}, form: {},
-      secretsPresent: {},
-      exists: false, available: false,
-    },
+  // ---- State ---------------------------------------------------------------
+  let schema: Schema | null = null;
+  let activeScope: Scope = "workspace";  // default to project; falls back to home if no workspace
+  const emptyScope = (): ScopeState => ({
+    configPath: "", secretsPath: "",
+    values: {}, initial: {}, form: {},
+    secretsPresent: {},
+    exists: false, available: false,
+  });
+  const scopes: Record<Scope, ScopeState> = {
+    home:      { ...emptyScope(), available: true },
+    workspace: { ...emptyScope(), available: false },
   };
 
-  // ---- Hide/show restoration -----------------------------------------------
-  const persisted = vscode.getState();
+  // ---- Hide/show restoration ------------------------------------------------
+  const persisted = vscode.getState<PersistedState>();
   if (persisted) {
-    schema      = persisted.schema;
+    schema = persisted.schema;
     activeScope = persisted.activeScope || "workspace";
-    Object.assign(scopes.home,      persisted.scopes?.home      || {});
-    Object.assign(scopes.workspace, persisted.scopes?.workspace || {});
+    Object.assign(scopes.home, persisted.scopes?.home ?? {});
+    Object.assign(scopes.workspace, persisted.scopes?.workspace ?? {});
     if (schema) renderActive();
   }
 
   // ---- Host messages -------------------------------------------------------
-  function ingestScope(target, src) {
-    target.configPath     = src.configPath;
-    target.secretsPath    = src.secretsPath;
-    target.values         = src.values || {};
-    target.exists         = !!src.exists;
+  function ingestScope(target: ScopeState, src: ScopeFromHost): void {
+    target.configPath = src.configPath;
+    target.secretsPath = src.secretsPath;
+    target.values = src.values || {};
+    target.exists = !!src.exists;
     target.secretsPresent = src.secretsPresent || {};
-    target.available      = true;
+    target.available = true;
     if (!target.initial || Object.keys(target.initial).length === 0) target.initial = { ...target.values };
     if (!target.form    || Object.keys(target.form).length    === 0) target.form    = { ...target.values };
   }
 
-  window.addEventListener("message", (e) => {
-    const m = e.data;
+  window.addEventListener("message", (e: MessageEvent) => {
+    const m = e.data as FromHost;
     if (m.type === "schema") {
       schema = m.schema;
       ingestScope(scopes.home, m.scopes.home);
@@ -83,7 +153,7 @@
   });
 
   // ---- Tab handling --------------------------------------------------------
-  function renderTabs() {
+  function renderTabs(): void {
     const tWs = $("tab-workspace");
     const tHm = $("tab-home");
     tWs.classList.toggle("active",  activeScope === "workspace");
@@ -96,7 +166,7 @@
 
   $("tab-workspace").addEventListener("click", () => {
     if (!scopes.workspace.available) return;
-    persistFormFromDom();        // capture current edits before switching away
+    persistFormFromDom();
     activeScope = "workspace";
     saveState();
     renderTabs();
@@ -111,7 +181,7 @@
   });
 
   // ---- Render active scope -------------------------------------------------
-  function renderActive() {
+  function renderActive(): void {
     if (!schema) return;
     const s = scopes[activeScope];
     $("scope-hint").textContent = `Editing ${s.configPath}` + (s.exists ? "" : " (will be created on save)");
@@ -128,12 +198,12 @@
     for (const f of schema.fields) {
       // Privileged keys still only make sense in workspace scope.
       if (activeScope === "home" && f.privileged) continue;
-      form.appendChild(renderField(f, s.form[f.key] ?? f.default, s.secretsPresent));
+      form.appendChild(renderField(f, s.form[f.key] ?? (f.default as string | undefined), s.secretsPresent));
     }
     bindFormChanges();
   }
 
-  function renderField(f, value, secretsPresent) {
+  function renderField(f: FieldDef, value: string | undefined, secretsPresent: Record<string, boolean>): HTMLElement {
     secretsPresent = secretsPresent || {};
     const row = document.createElement("div");
     row.className = "row" + (f.privileged ? " privileged" : "");
@@ -143,44 +213,49 @@
     label.setAttribute("for", `f-${f.key}`);
     row.appendChild(label);
 
-    let input;
+    let input: HTMLElement & { dataset: DOMStringMap };
+
     switch (f.type) {
       case "string": {
-        input = document.createElement("input");
-        input.type = "text";
-        input.value = value ?? "";
-        if (f.pattern) input.pattern = f.pattern;
-        input.addEventListener("input", () => validatePattern(input, f.pattern));
-        validatePattern(input, f.pattern);
+        const i = document.createElement("input");
+        i.type = "text";
+        i.value = value ?? "";
+        if (f.pattern) i.pattern = f.pattern;
+        i.addEventListener("input", () => validatePattern(i, f.pattern));
+        validatePattern(i, f.pattern);
+        input = i;
         break;
       }
       case "int": {
-        input = document.createElement("input");
-        input.type = "number";
-        input.value = value ?? "";
-        if (f.min != null) input.min = String(f.min);
-        if (f.max != null) input.max = String(f.max);
+        const i = document.createElement("input");
+        i.type = "number";
+        i.value = value ?? "";
+        if (f.min != null) i.min = String(f.min);
+        if (f.max != null) i.max = String(f.max);
+        input = i;
         break;
       }
       case "bool": {
-        input = document.createElement("input");
-        input.type = "checkbox";
-        input.checked = value === true || value === "1" || value === "true";
+        const i = document.createElement("input");
+        i.type = "checkbox";
+        i.checked = value === ("true" as unknown as string) || value === "1" || (value as unknown) === true;
+        input = i;
         break;
       }
       case "enum": {
-        input = document.createElement("select");
+        const i = document.createElement("select");
         for (const opt of f.options || []) {
           const o = document.createElement("option");
           o.value = opt; o.textContent = opt;
           if (String(value) === opt) o.selected = true;
-          input.appendChild(o);
+          i.appendChild(o);
         }
+        input = i;
         break;
       }
       case "agent_combo": {
-        input = document.createElement("div");
-        input.className = "checkbox-group";
+        const i = document.createElement("div");
+        i.className = "checkbox-group";
         const selected = new Set((value || "").split(",").filter(Boolean));
         for (const opt of f.options || []) {
           const wrap = document.createElement("label");
@@ -191,8 +266,9 @@
           cb.checked = selected.has(opt);
           wrap.appendChild(cb);
           wrap.appendChild(document.createTextNode(" " + opt));
-          input.appendChild(wrap);
+          i.appendChild(wrap);
         }
+        input = i;
         break;
       }
       case "secret": {
@@ -203,28 +279,28 @@
         label.appendChild(document.createTextNode(" "));
         label.appendChild(badge);
 
-        input = document.createElement("input");
-        input.type = "password";
-        input.placeholder = isSet ? "(leave blank to keep current value)" : "(enter to set)";
-        input.value = "";
+        const i = document.createElement("input");
+        i.type = "password";
+        i.placeholder = isSet ? "(leave blank to keep current value)" : "(enter to set)";
+        i.value = "";
         const reveal = document.createElement("button");
         reveal.type = "button";
         reveal.className = "reveal";
         reveal.textContent = "👁";
         reveal.addEventListener("click", () => {
-          input.type = input.type === "password" ? "text" : "password";
+          i.type = i.type === "password" ? "text" : "password";
         });
         const wrap = document.createElement("div");
         wrap.className = "secret-wrap";
-        wrap.appendChild(input);
+        wrap.appendChild(i);
         wrap.appendChild(reveal);
         row.appendChild(wrap);
         if (f.description) {
           const d = document.createElement("p"); d.className = "desc"; d.textContent = f.description;
           row.appendChild(d);
         }
-        input.dataset.key = f.key;
-        input.dataset.type = f.type;
+        i.dataset.key = f.key;
+        i.dataset.type = f.type;
         return row;
       }
     }
@@ -241,51 +317,59 @@
     return row;
   }
 
-  function validatePattern(input, pattern) {
+  function validatePattern(input: HTMLInputElement, pattern: string | undefined): void {
     if (!pattern) return;
     const re = new RegExp(pattern);
     input.classList.toggle("invalid", input.value.length > 0 && !re.test(input.value));
   }
 
-  function collect() {
-    const out = {};
-    for (const row of $("form").children) {
+  function collect(): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const row of Array.from($("form").children)) {
       const groupKey = row.querySelector(".checkbox-group");
       if (groupKey) {
-        const k = row.querySelector("label").textContent.trim().split(/\s/)[0];
-        const vals = [...groupKey.querySelectorAll("input:checked")].map(c => c.value);
+        const labelEl = row.querySelector("label");
+        if (!labelEl?.textContent) continue;
+        const k = labelEl.textContent.trim().split(/\s/)[0];
+        const vals = Array.from(groupKey.querySelectorAll("input:checked")).map(c => (c as HTMLInputElement).value);
         if (vals.length) out[k] = vals.join(",");
         continue;
       }
-      const keyEl = row.querySelector("[data-key]");
+      const keyEl = row.querySelector("[data-key]") as (HTMLInputElement | HTMLSelectElement | null);
       if (!keyEl) continue;
-      const k = keyEl.dataset.key;
-      const t = keyEl.dataset.type;
-      if (t === "bool")        out[k] = keyEl.checked ? "1" : "0";
-      else if (t === "secret") { if (keyEl.value) out[k] = keyEl.value; }
-      else                     { if (keyEl.value !== "") out[k] = keyEl.value; }
+      const k = keyEl.dataset.key!;
+      const t = keyEl.dataset.type!;
+      if (t === "bool") {
+        out[k] = (keyEl as HTMLInputElement).checked ? "1" : "0";
+      } else if (t === "secret") {
+        const v = (keyEl as HTMLInputElement).value;
+        if (v) out[k] = v;  // skip blank — keeps existing
+      } else {
+        const v = keyEl.value;
+        if (v !== "") out[k] = v;
+      }
     }
     return out;
   }
 
-  function persistFormFromDom() {
+  function persistFormFromDom(): void {
     if (!schema) return;
     scopes[activeScope].form = collect();
     saveState();
   }
 
-  function bindFormChanges() {
+  function bindFormChanges(): void {
     $("form").addEventListener("input", persistFormFromDom);
   }
 
-  function saveState() {
-    vscode.setState({ schema, activeScope, scopes });
+  function saveState(): void {
+    vscode.setState<PersistedState>({ schema, activeScope, scopes });
   }
 
   // ---- Save / Revert -------------------------------------------------------
   $("save").addEventListener("click", () => {
     persistFormFromDom();
-    vscode.postMessage({ type: "save", scope: activeScope, values: collect() });
+    vscode.postMessage({ type: "save", scope: activeScope, values: collect() } satisfies ToHost);
   });
   $("revert").addEventListener("click", () => {
     scopes[activeScope].form = { ...scopes[activeScope].initial };
@@ -293,5 +377,5 @@
     renderActive();
   });
 
-  vscode.postMessage({ type: "ready" });
+  vscode.postMessage({ type: "ready" } satisfies ToHost);
 })();

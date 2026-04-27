@@ -10,17 +10,20 @@ VSCode extension wrapping the [sandy](https://github.com/rappdw/sandy) CLI. Host
 
 ```bash
 npm install                # also runs the node-pty native build
-npm run compile            # tsc + copy xterm.js assets to media/terminal/vendor/
-npm run watch              # tsc -watch (pair with F5 dev host for live iteration)
+npm run compile            # full pipeline: copy-xterm → typecheck:webview → build:webviews → tsc
+npm run watch              # tsc -watch for the host code
+npm run watch:webviews     # esbuild --watch for media/{terminal,settings}/src/*.ts
 npm test                   # vitest run — unit tests for pure-logic modules
 npm run test:watch         # vitest interactive
 npm run test:coverage      # vitest with v8 coverage report
+npm run typecheck:webview  # tsc --noEmit -p tsconfig.webview.json (webview TS only)
+npm run build:webviews     # esbuild bundles webview TS into media/{terminal,settings}/dist/
 npm run package-vsix       # produces sandy-ui-<version>.vsix in repo root
 npm run install-vsix       # packages + installs into your real VSCode (--force overwrite)
 npm run release            # packages + creates GitHub release with vsix attached, tagged v<version>
 ```
 
-F5 in VSCode opens the Extension Development Host — fastest dev loop. `install-vsix` puts the latest into your everyday VSCode.
+F5 in VSCode opens the Extension Development Host — fastest dev loop. For active webview iteration: run `watch` and `watch:webviews` in two terminals, then F5. `install-vsix` puts the latest into your everyday VSCode.
 
 ## On every release
 
@@ -36,8 +39,9 @@ When `package.json` `version` is bumped and `npm run release` is run, **also upd
 ## Architecture you can't infer from file names
 
 - **Two-process pattern (host + webview)**. Extension host (Node) owns `node-pty` and the PTY supervisor; webview (browser context) owns xterm.js and OSC parsing. They communicate only via `postMessage`. State lives in `webview.getState()/setState()` for hide/show survival — and the persisted shape must be backwards-compatible with prior versions or `getState()` returns garbage that breaks the page silently.
-- **Webview JS errors are silent by default**. Both `media/terminal/bridge.js` and `media/settings/settings.js` install `window.error` + `unhandledrejection` handlers that post errors back to the host's "Sandy" / "Sandy Settings" output channels. When something "doesn't work" in a webview, look at the output channel before guessing.
-- **OSC handling chain**. xterm.js's `parser.registerOscHandler(<code>, cb)` (requires `allowProposedApi: true`) intercepts OSC 9 / 52 / 99 / 777 / 0; bridge.js posts a typed event to host; host routes to `vscode.window.showInformationMessage`, `vscode.env.clipboard.writeText`, or panel title updates. **OSC sequences emitted from inside sandy's inner tmux are eaten by tmux's default allowlist** — pass-through requires `set -g allow-passthrough on` in sandy's tmux.conf (handoff queued at `handoffs/sandy-flock-locking.md`'s sibling spot — currently only flock is handed off).
+- **Webview code is TypeScript, bundled by esbuild**. Sources live under `media/{terminal,settings}/src/*.ts`; bundles land in `media/{terminal,settings}/dist/*.js` and are referenced by host webviewPanel HTML. The dist/ directories are gitignored — built fresh by `npm run compile`. Webview globals (`Terminal`, `FitAddon`, `WebLinksAddon`, `acquireVsCodeApi`) are declared in `media/types.d.ts`. Each entry file needs `export {};` at the top so its local types don't leak into the global type scope shared with the other webview file.
+- **Webview errors are silent by default**. Both bridge and settings install `window.error` + `unhandledrejection` handlers that post errors back to the host's "Sandy" / "Sandy Settings" output channels. When something "doesn't work" in a webview, look at the output channel before guessing.
+- **OSC handling chain**. xterm.js's `parser.registerOscHandler(<code>, cb)` (requires `allowProposedApi: true`) intercepts OSC 9 / 52 / 99 / 777 / 0; bridge posts a typed event to host; host routes to `vscode.window.showInformationMessage`, `vscode.env.clipboard.writeText`, or panel title updates. **OSC sequences emitted from inside sandy's inner tmux are eaten by tmux's default allowlist** — pass-through requires `set -g allow-passthrough on` in sandy's tmux.conf (handoff queued at `handoffs/sandy-flock-locking.md`'s sibling spot — currently only flock is handed off).
 - **PTY size on launch**. Webview measures via `fit.fit()` after two `requestAnimationFrame` ticks (waits for VSCode panel layout to settle), passes cols/rows in the `ready` message; host spawns `node-pty` at those dimensions. **Hardcoded 80×24 spawn = sandy renders into upper-left corner** until manual resize. ResizeObserver on the terminal element (NOT `window.resize`) catches all subsequent layout changes.
 - **Signal escalation on tab close**. `panel.onDidDispose` does `SIGINT → wait 3s → SIGTERM → wait 2s → SIGKILL`. The 3s SIGINT wait is load-bearing — sandy's cleanup trap runs `docker stop` + `docker network rm` which is slow; cutting short leaks lock files and Docker networks. Don't shorten without measuring.
 - **Stale-lock sweep**. `src/terminal/sandyState.ts` runs before each launch. Reads PID from `~/.sandy/sandboxes/.<basename>-*.lock`, removes if PID is dead (`process.kill(pid, 0)` distinguishing ESRCH from EPERM). Live PIDs are left alone. Sandy itself should adopt flock(2) (handoff at `handoffs/sandy-flock-locking.md`) — until then, this sweep is the production behavior.

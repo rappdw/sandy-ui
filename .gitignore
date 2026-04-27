@@ -3,6 +3,7 @@ out/
 *.vsix
 .vscode-test/
 media/terminal/vendor/
+media/**/dist/
 coverage/
 
 # Per-user / local-only

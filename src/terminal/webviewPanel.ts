@@ -53,7 +53,7 @@ export async function openTerminalPanel(ctx: vscode.ExtensionContext) {
     xtermCss:   mediaUri("vendor/xterm.css"),
     fitAddon:   mediaUri("vendor/addon-fit.js"),
     linksAddon: mediaUri("vendor/addon-web-links.js"),
-    bridgeJs:   mediaUri("bridge.js"),
+    bridgeJs:   mediaUri("dist/bridge.js"),
     css:        mediaUri("terminal.css"),
   });
 
