@@ -16,14 +16,22 @@ export function activate(ctx: vscode.ExtensionContext) {
 
   const projects = new ProjectsTreeProvider(poller);
 
+  // Honor a pending launch from a previous-window tree click. When the user
+  // clicks a tree item for a different workspace, we openFolder (which
+  // reloads VSCode) and stash a marker here; on activation in the new
+  // workspace we pick it up and fire sandy.launch automatically.
+  void resumePendingLaunchIfAny(ctx, stateOut);
+
   ctx.subscriptions.push(
     poller,
     projects,
     stateOut,
     vscode.window.registerTreeDataProvider("sandy.projects", projects),
 
-    // Palette + tree-default-click
-    vscode.commands.registerCommand("sandy.launch",        (arg) => openTerminalPanel(ctx, arg?.workspacePath)),
+    // Palette + tree-default-click. If the target workspace differs from the
+    // current one, we openFolder (reloads VSCode), persist a pending-launch
+    // marker, and let resumePendingLaunchIfAny finish the job after reload.
+    vscode.commands.registerCommand("sandy.launch", (arg) => launchWithWorkspaceSwitch(ctx, arg?.workspacePath, stateOut)),
     vscode.commands.registerCommand("sandy.approval.test", () => runApprovalTest(ctx)),
     vscode.commands.registerCommand("sandy.settings.open", () => openSettingsPanel(ctx)),
     vscode.commands.registerCommand("sandy.state.refresh", () => poller.refresh()),
@@ -36,7 +44,7 @@ export function activate(ctx: vscode.ExtensionContext) {
         vscode.window.showWarningMessage("Sandy: this sandbox has no workspace_path — can't launch automatically. Use Open Workspace Folder, then Sandy: Launch from the palette.");
         return;
       }
-      return openTerminalPanel(ctx, ws);
+      return launchWithWorkspaceSwitch(ctx, ws, stateOut);
     }),
     vscode.commands.registerCommand("sandy.tree.openWorkspace", async (node: any) => {
       const ws = node?.sandbox?.workspace_path;
@@ -174,4 +182,80 @@ function revealInOSFileManager(fsPath: string): void {
                                       : "xdg-open";
     cp.spawn(cmd, [fsPath], { detached: true, stdio: "ignore" }).unref();
   });
+}
+
+// ---------------------------------------------------------------------------
+// Workspace-aware launch: if the requested workspace differs from the current
+// VSCode workspace folder, openFolder (which reloads VSCode) and queue the
+// launch for after-reload via globalState. Otherwise just launch.
+// ---------------------------------------------------------------------------
+
+const PENDING_LAUNCH_KEY = "sandy.pendingLaunch";
+const PENDING_LAUNCH_TTL_MS = 30_000;  // generous; reload + activate usually <5s
+
+interface PendingLaunch {
+  workspace: string;
+  at: number;
+}
+
+async function launchWithWorkspaceSwitch(
+  ctx: vscode.ExtensionContext,
+  targetWs: string | undefined,
+  out: vscode.OutputChannel,
+): Promise<void> {
+  // No target — defer to openTerminalPanel which prompts for a folder.
+  if (!targetWs) return openTerminalPanel(ctx, undefined);
+
+  const currentWs = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+  if (currentWs && currentWs === targetWs) {
+    // Already in the right workspace — just launch.
+    return openTerminalPanel(ctx, targetWs);
+  }
+
+  if (!currentWs) {
+    // No folder open at all — no reload needed; openTerminalPanel will use
+    // the override directly. (Equivalent to "Launch here" in an empty window.)
+    return openTerminalPanel(ctx, targetWs);
+  }
+
+  // Workspace mismatch — switch by openFolder (reloads VSCode), and persist
+  // a pending-launch marker so resumePendingLaunchIfAny picks it up after
+  // the new workspace activates.
+  const pending: PendingLaunch = { workspace: targetWs, at: Date.now() };
+  await ctx.globalState.update(PENDING_LAUNCH_KEY, pending);
+  out.appendLine(`[${new Date().toISOString()}] workspace switch: ${currentWs} → ${targetWs} (pending launch queued)`);
+  await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(targetWs), { forceNewWindow: false });
+  // Execution doesn't continue past openFolder in practice — VSCode reloads.
+}
+
+async function resumePendingLaunchIfAny(
+  ctx: vscode.ExtensionContext,
+  out: vscode.OutputChannel,
+): Promise<void> {
+  const pending = ctx.globalState.get<PendingLaunch>(PENDING_LAUNCH_KEY);
+  if (!pending) return;
+
+  // Always clear on activation, even if we don't end up firing — stale
+  // markers (e.g., user cancelled the openFolder dialog) shouldn't persist.
+  await ctx.globalState.update(PENDING_LAUNCH_KEY, undefined);
+
+  const ageMs = Date.now() - pending.at;
+  if (ageMs > PENDING_LAUNCH_TTL_MS) {
+    out.appendLine(`[${new Date().toISOString()}] discarding stale pending launch (${Math.round(ageMs / 1000)}s old)`);
+    return;
+  }
+
+  const currentWs = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (currentWs !== pending.workspace) {
+    out.appendLine(`[${new Date().toISOString()}] discarding pending launch — current workspace ${currentWs} ≠ target ${pending.workspace}`);
+    return;
+  }
+
+  // Brief delay so VSCode's tree/editor finish settling before we open a
+  // webview tab. Not strictly required but produces a less jarring sequence.
+  out.appendLine(`[${new Date().toISOString()}] resuming pending launch in ${pending.workspace}`);
+  setTimeout(() => {
+    void vscode.commands.executeCommand("sandy.launch", { workspacePath: pending.workspace });
+  }, 500);
 }

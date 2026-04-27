@@ -68,6 +68,17 @@ Errors from `--validate-config` are logged but **never block the launch** — sa
 
 `Sandy: Refresh State` command (palette + tree title-bar icon) forces an out-of-cycle poll.
 
+## Workspace-aware launch
+
+`sandy.launch` (and `sandy.tree.launch`) route through `launchWithWorkspaceSwitch` in `extension.ts`. Behavior:
+
+- Target workspace matches current VSCode workspace folder → just launch.
+- No current workspace → launch with the override (works in an empty window).
+- Target ≠ current → write a `PendingLaunch {workspace, at}` to globalState (key `sandy.pendingLaunch`), then `vscode.openFolder` to switch. VSCode reloads the workspace; the extension reactivates.
+- On `activate()`, `resumePendingLaunchIfAny` reads + clears the marker. If still in TTL (30s) and the new workspace matches what the marker requested, fires `sandy.launch` after a 500ms settle delay.
+
+The marker is *always* cleared on activate (even when not fired) so a cancelled openFolder dialog doesn't leave a ghost that triggers next time the user reopens the workspace.
+
 ## Sandbox deletion
 
 `src/state/deleteSandbox.ts` (`deleteSandboxDir`) provides safe filesystem removal of a sandbox dir. **Three safety layers** because `rm -rf` on a wild path is catastrophic:
