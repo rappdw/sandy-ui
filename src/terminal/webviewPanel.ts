@@ -161,8 +161,13 @@ export async function openTerminalPanel(ctx: vscode.ExtensionContext, workspaceO
     }
   });
 
-  // Surface the output channel proactively so the user sees what's happening.
-  out.show(true);
+  // Surface the output channel proactively so the user sees what's happening
+  // — but ONLY if they haven't asked to keep the bottom panel closed (which
+  // is where the output channel lives). Showing it would re-open the panel
+  // we just closed for them.
+  if (!vscode.workspace.getConfiguration("sandy.launch").get<boolean>("closeBottomPanel", true)) {
+    out.show(true);
+  }
 
   // Proper signal escalation per SPEC §"Session supervisor":
   // SIGINT (give cleanup trap a chance) → SIGTERM → SIGKILL.

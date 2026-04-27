@@ -39,7 +39,12 @@ export function openSettingsPanel(ctx: vscode.ExtensionContext) {
 
   const resolution = getCachedSchema(ctx.globalStorageUri.fsPath, schemaMock as Schema);
   const schema = resolution.schema;
-  out.show(true);
+  // Auto-pop the output channel only if the user keeps the bottom panel open
+  // — same rationale as openTerminalPanel. Don't fight the maximize-editor-
+  // space setting.
+  if (!vscode.workspace.getConfiguration("sandy.launch").get<boolean>("closeBottomPanel", true)) {
+    out.show(true);
+  }
   log(`schema source=${resolution.source}` + (resolution.sandy_version ? ` (sandy ${resolution.sandy_version})` : ""));
   if (resolution.error) log(`schema fallback reason: ${resolution.error}`);
 
