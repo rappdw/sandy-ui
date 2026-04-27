@@ -73,8 +73,14 @@ function buildNodes(r: StateResolution): TreeNode[] {
     nodes.push(new EmptyNode("No sandy sandboxes yet"));
   } else {
     for (const s of sandboxes) {
-      const badge = deriveBadge(s, state.running_containers);
-      nodes.push(new SandboxNode(s, badge));
+      try {
+        const badge = deriveBadge(s, state.running_containers);
+        nodes.push(new SandboxNode(s, badge));
+      } catch (e: any) {
+        // One malformed sandbox entry shouldn't break the entire tree.
+        nodes.push(new StatusNode(`⚠ skipped ${s?.name ?? "(unnamed)"}`, "warning",
+          `Failed to render sandbox: ${e?.message ?? e}`));
+      }
     }
   }
   return nodes;
@@ -82,16 +88,24 @@ function buildNodes(r: StateResolution): TreeNode[] {
 
 class SandboxNode extends vscode.TreeItem {
   constructor(public readonly sandbox: SandySandbox, public readonly badge: SandboxBadge) {
-    super(abbreviatePath(sandbox.workspace_path), vscode.TreeItemCollapsibleState.None);
+    // Sandy MAY omit workspace_path on orphan/legacy sandboxes — fall back to
+    // sandbox.path or sandbox.name so the tree can still render. Don't crash
+    // on a single malformed entry.
+    const labelSource = sandbox.workspace_path || sandbox.path || sandbox.name || "(unknown sandbox)";
+    super(abbreviatePath(labelSource), vscode.TreeItemCollapsibleState.None);
     this.iconPath = iconForBadge(badge);
     this.description = describe(sandbox, badge);
     this.tooltip = tooltipFor(sandbox, badge);
     this.contextValue = `sandbox.${badge}`;
-    this.command = {
-      command: "sandy.launch",
-      title: "Launch",
-      arguments: [{ workspacePath: sandbox.workspace_path }],
-    };
+    // Only attach the launch command when we have an actual workspace path —
+    // launching against a missing/null path would just open the folder picker.
+    if (sandbox.workspace_path) {
+      this.command = {
+        command: "sandy.launch",
+        title: "Launch",
+        arguments: [{ workspacePath: sandbox.workspace_path }],
+      };
+    }
   }
 
   // Construct a placeholder node from just a workspace path (used when sandy
@@ -124,7 +138,8 @@ class EmptyNode extends vscode.TreeItem {
 
 // --- presentation helpers --------------------------------------------------
 
-function abbreviatePath(p: string): string {
+function abbreviatePath(p: string | undefined | null): string {
+  if (!p) return "(no path)";
   const home = os.homedir();
   return p.startsWith(home) ? "~" + p.slice(home.length) : p;
 }
