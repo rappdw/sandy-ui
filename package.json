@@ -31,8 +31,22 @@
       {
         "command": "sandy.settings.open",
         "title": "Sandy: Open Settings"
+      },
+      {
+        "command": "sandy.state.refresh",
+        "title": "Sandy: Refresh State",
+        "icon": "$(refresh)"
       }
     ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "sandy.state.refresh",
+          "when": "view == sandy.projects",
+          "group": "navigation"
+        }
+      ]
+    },
     "viewsContainers": {
       "activitybar": [
         {

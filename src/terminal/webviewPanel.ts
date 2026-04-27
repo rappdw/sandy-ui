@@ -19,8 +19,14 @@ type FromHost =
   | { type: "data"; data: string }
   | { type: "exit"; code: number };
 
-export async function openTerminalPanel(ctx: vscode.ExtensionContext) {
-  let ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+export async function openTerminalPanel(ctx: vscode.ExtensionContext, workspaceOverride?: string) {
+  // Source-of-workspace priority:
+  //   1. Explicit override (from tree-item click — sandy.launch invoked with
+  //      { workspacePath } argument)
+  //   2. Current VSCode workspace folder
+  //   3. User's folder picker (don't silently fall back to $HOME — sandy
+  //      scans the workspace, would TCC-cascade on macOS)
+  let ws = workspaceOverride ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!ws) {
     const picked = await vscode.window.showOpenDialog({
       canSelectFolders: true, canSelectFiles: false, canSelectMany: false,

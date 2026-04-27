@@ -48,6 +48,16 @@ When `package.json` `version` is bumped and `npm run release` is run, **also upd
 - **Settings scope model**. Project (default) and Global tabs each edit their own `<scope>/.sandy/config` and `<scope>/.sandy/.secrets`. Secrets are scope-aware — the spec originally pinned all secrets to `~/.sandy/.secrets` for safety; that was loosened. Workspace `.secrets` is a footgun for committed repos; the form shows a warning banner about adding `.sandy/.secrets` to `.gitignore`. **Every schema field renders in both tabs** regardless of its `tier` — `tier` is documentation, not a hard constraint. Privileged keys get a yellow border in both tabs; the workspace-tab warning explains that workspace-set privileged keys trigger the passive-privileged approval flow on next launch (home-set ones don't, since the user explicitly set them in their own dir).
 - **Workspace selection is explicit, never inferred**. `openTerminalPanel` prompts with the folder picker if no workspace folder is open. **Never silently fall back to `$HOME`** — sandy scans its workspace and would touch every macOS-protected directory, triggering a TCC prompt cascade attributed to VSCode.
 
+## State polling
+
+`src/state/poller.ts` (`StatePoller`) invokes `sandy --print-state` every 5s, parses the JSON, and emits a change event when the summary differs from the previous poll. The summary comparison ignores noisy fields (e.g., `size_bytes`) so the tree doesn't refresh unnecessarily; it only fires on sandbox count change, lock-state change, last_used_at change, or running-container set change.
+
+`src/projectsTree.ts` subscribes to the poller. Each TreeItem represents a sandbox; the icon is derived by `src/state/badge.ts` (running → debug-start, locked → lock, stale → clock, fresh → sparkle, current → terminal). Tree click invokes `sandy.launch` with `{workspacePath: <sandbox.workspace_path>}` so launching from the tree targets the right workspace, not whatever VSCode happens to have open.
+
+`sandy --print-state` returns `running_containers: null` when docker isn't reachable; the tree shows a top-level "⚠ Docker unreachable" status node in that case. When sandy isn't on PATH at all, the tree falls back to a single "current workspace" placeholder so the launch command still works via the folder-picker flow.
+
+`Sandy: Refresh State` command (palette + tree title-bar icon) forces an out-of-cycle poll.
+
 ## Schema source
 
 `src/schema/cache.ts` invokes `sandy --print-schema`, parses the JSON, and caches the result in `globalStorageUri/schema-cache.json`. The cache is keyed by `sandy --version` output — when sandy upgrades, the next `getCachedSchema` call detects the version mismatch and refetches. Cache writes are atomic (temp + rename); cache write failures are non-fatal (always returns a usable schema).

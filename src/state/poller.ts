@@ -1,0 +1,105 @@
+import * as cp from "child_process";
+import * as vscode from "vscode";
+import type { SandyState } from "./types";
+
+// Polls `sandy --print-state` on a fixed cadence; emits change events when
+// the state JSON differs from the previous poll. Tree provider subscribes
+// to refresh itself when state changes.
+
+export interface StateResolution {
+  state?: SandyState;
+  error?: string;
+  fetched_at: Date;
+}
+
+export class StatePoller implements vscode.Disposable {
+  private readonly _onDidChange = new vscode.EventEmitter<StateResolution>();
+  readonly onDidChange = this._onDidChange.event;
+
+  private latest: StateResolution = { fetched_at: new Date(0) };
+  private timer: NodeJS.Timeout | undefined;
+  private inFlight = false;
+
+  constructor(
+    private readonly intervalMs: number = 5_000,
+    private readonly out?: vscode.OutputChannel,
+  ) {}
+
+  start(): void {
+    this.refresh();  // immediate first fetch
+    if (this.timer) return;
+    this.timer = setInterval(() => { void this.refresh(); }, this.intervalMs);
+  }
+
+  dispose(): void {
+    if (this.timer) { clearInterval(this.timer); this.timer = undefined; }
+    this._onDidChange.dispose();
+  }
+
+  current(): StateResolution { return this.latest; }
+
+  async refresh(): Promise<StateResolution> {
+    if (this.inFlight) return this.latest;
+    this.inFlight = true;
+    try {
+      const next = await this.invoke();
+      const changed = !equalsSummary(this.latest.state, next.state) || (this.latest.error !== next.error);
+      this.latest = next;
+      if (changed) this._onDidChange.fire(next);
+      return next;
+    } finally {
+      this.inFlight = false;
+    }
+  }
+
+  private invoke(): Promise<StateResolution> {
+    return new Promise<StateResolution>((resolve) => {
+      cp.execFile("sandy", ["--print-state"], {
+        encoding: "utf8",
+        timeout: 10_000,
+        maxBuffer: 10 * 1024 * 1024,
+      }, (err, stdout) => {
+        const fetched_at = new Date();
+        if (err) {
+          const msg = (err as NodeJS.ErrnoException).code === "ENOENT"
+            ? "sandy not on PATH"
+            : (err.message || String(err));
+          this.out?.appendLine(`[${fetched_at.toISOString()}] state poll failed: ${msg}`);
+          resolve({ error: msg, fetched_at });
+          return;
+        }
+        try {
+          const state = JSON.parse(stdout) as SandyState;
+          resolve({ state, fetched_at });
+        } catch (e: any) {
+          const msg = `parse failed: ${e?.message ?? e}`;
+          this.out?.appendLine(`[${fetched_at.toISOString()}] state poll ${msg}`);
+          resolve({ error: msg, fetched_at });
+        }
+      });
+    });
+  }
+}
+
+// Coarse equality: only compares fields the tree view cares about. Avoids
+// firing change events for irrelevant updates (e.g., size_bytes ticking).
+function equalsSummary(a: SandyState | undefined, b: SandyState | undefined): boolean {
+  if (!a || !b) return a === b;
+  if (a.docker_reachable !== b.docker_reachable) return false;
+  if ((a.sandboxes?.length ?? 0) !== (b.sandboxes?.length ?? 0)) return false;
+  if ((a.running_containers?.length ?? 0) !== (b.running_containers?.length ?? 0)) return false;
+  // Per-sandbox lock + running state can change.
+  for (let i = 0; i < a.sandboxes.length; i++) {
+    const sa = a.sandboxes[i];
+    const sb = b.sandboxes[i];
+    if (sa.name !== sb.name) return false;
+    if (!!sa.lock_held !== !!sb.lock_held) return false;
+    if (sa.last_used_at !== sb.last_used_at) return false;
+  }
+  // Compare running_containers names by sandbox attribution.
+  const aRun = new Set((a.running_containers ?? []).map(c => c.sandbox));
+  const bRun = new Set((b.running_containers ?? []).map(c => c.sandbox));
+  if (aRun.size !== bRun.size) return false;
+  for (const s of aRun) if (!bRun.has(s)) return false;
+  return true;
+}
