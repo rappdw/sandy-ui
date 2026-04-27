@@ -68,6 +68,10 @@ Errors from `--validate-config` are logged but **never block the launch** — sa
 
 `Sandy: Refresh State` command (palette + tree title-bar icon) forces an out-of-cycle poll.
 
+## Activation strategy
+
+`activationEvents: ["onStartupFinished"]`. Eager activation after VSCode startup is required so `resumePendingLaunchIfAny` runs even when the user doesn't click the Sandy activity bar. The trade-off: the StatePoller starts on every VSCode window (one `sandy --print-state` invocation every 5s, even in workspaces where the user isn't using sandy). Acceptable for now; revisit if the polling cost becomes annoying — could gate polling on the projects view actually being visible via `onDidChangeVisibility`.
+
 ## Workspace-aware launch
 
 `sandy.launch` (and `sandy.tree.launch`) route through `launchWithWorkspaceSwitch` in `extension.ts`. Behavior:

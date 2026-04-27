@@ -17,7 +17,7 @@
     "Other"
   ],
   "main": "./out/extension.js",
-  "activationEvents": [],
+  "activationEvents": ["onStartupFinished"],
   "contributes": {
     "commands": [
       { "command": "sandy.launch",                    "title": "Sandy: Launch (in webview tab)" },
