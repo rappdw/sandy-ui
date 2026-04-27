@@ -11,10 +11,10 @@ import * as fs from "fs";
 import * as path from "path";
 import type { SandyState, SandySandbox } from "./types";
 
-// Common field names WORKSPACE.json might use for the workspace path. Tried
-// in order — first string-valued match wins. Easy to extend if sandy uses a
-// different name.
-const WORKSPACE_PATH_FIELDS = ["workspace", "workspace_path", "path"];
+// Field names WORKSPACE.json may use for the workspace path, tried in order
+// — first string-valued match wins. Sandy currently uses `workspace_path`;
+// the others are kept as defensive fallbacks against future schema drift.
+const WORKSPACE_PATH_FIELDS = ["workspace_path", "workspace", "path"];
 
 export function enrichWithWorkspaceJson(state: SandyState): SandyState {
   for (const sb of state.sandboxes ?? []) {

@@ -50,11 +50,11 @@ describe("enrichWithWorkspaceJson", () => {
     expect(sb.workspace_path).toBe("/Users/x/dev/third");
   });
 
-  it("prefers 'workspace' over 'workspace_path' when both present", () => {
+  it("prefers 'workspace_path' (sandy's actual field) over fallbacks when both present", () => {
     const sb = sandbox();
-    writeWorkspaceJson(sb.path, { workspace: "/A", workspace_path: "/B" });
+    writeWorkspaceJson(sb.path, { workspace_path: "/canonical", workspace: "/legacy" });
     enrichWithWorkspaceJson(state([sb]));
-    expect(sb.workspace_path).toBe("/A");
+    expect(sb.workspace_path).toBe("/canonical");
   });
 
   it("does NOT overwrite an existing workspace_path", () => {
