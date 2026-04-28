@@ -9,7 +9,12 @@ node_modules/.cache/**
 .gitattributes
 tsconfig.json
 tsconfig.webview.json
+tsconfig.integration.json
 vitest.config.ts
+.vscode-test.mjs
+.vscode-test/**
+.vscode-test-extensions/**
+out-integration/**
 coverage/**
 **/*.map
 media/**/src/**

@@ -31,10 +31,11 @@ When `package.json` `version` is bumped and `npm run release` is run, **also upd
 
 ## Tests
 
-- **Unit tests** live under `test/`, run via Vitest (`npm test`). Pure-logic modules only — `oscHandler`, `configIO`, `sandyState`. Each module also exports a path-parameterized variant (e.g., `sweepStaleLocksIn` alongside the production `sweepStaleLocks`) so tests don't touch the user's real `~/.sandy/`.
-- **Integration tests** (post-0.2.0): `@vscode/test-electron` runs the extension in a headless VSCode and exercises commands. Belongs under `test/integration/`. Files like `webviewPanel.ts`, `pty.ts`, and the approval webviews can only be covered this way.
-- **Coverage targets**: 80%+ on pure-logic modules (currently ~95% for `oscHandler` and `sandyState`). Don't chase coverage on files explicitly excluded in `vitest.config.ts` — they're integration-test territory.
-- When adding a feature with branching logic (config parsing, lock detection, schema partitioning, etc.), add a Vitest case alongside it. The pattern that bit twice during the spike — silent runtime errors in webview code — is the strongest argument for tests + the eventual webview-JS-to-TS migration.
+- **Unit tests** live under `test/*.test.ts`, run via Vitest (`npm test`). Pure-logic modules only — `oscHandler`, `configIO`, `sandyState`, `schema/parse`, `state/badge`, `state/enrich`, `state/deleteSandbox`, `state/sandyPath`, `approval/validate`. Each FS-touching module also exports a path-parameterized variant (e.g., `sweepStaleLocksIn` alongside the production `sweepStaleLocks`) so tests don't touch the user's real `~/.sandy/`.
+- **Integration tests** live under `test/integration/*.test.ts`, run via `@vscode/test-electron` (`npm run test:integration`). They download a real VSCode, install the extension, and run Mocha-suite assertions inside the extension host context — so they can hit `vscode.extensions.getExtension(...)`, `vscode.commands.executeCommand(...)`, `vscode.window.tabGroups`, etc. Use these for things vitest can't reach: extension activation, command registration, webview panels opening as a side effect of commands.
+- Integration tests compile via `tsconfig.integration.json` to `out-integration/*.test.js`; vscode-test config is `.vscode-test.mjs`. Vitest excludes `test/integration/**` so the two suites don't collide.
+- **Coverage targets**: 80%+ on pure-logic modules (currently ~95% for `oscHandler` and `sandyState`). Don't chase coverage on files excluded in `vitest.config.ts` — they're integration-test territory now.
+- When adding a feature with branching logic (config parsing, lock detection, schema partitioning, etc.), add a Vitest case alongside it. When adding a new command or webview surface, add an integration case.
 
 ## Architecture you can't infer from file names
 

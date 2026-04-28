@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "test/integration",
+    "outDir": "out-integration",
+    "types": ["mocha", "node"],
+    "lib": ["ES2022"],
+    "noEmit": false
+  },
+  "include": ["test/integration/**/*.ts"],
+  "exclude": ["node_modules", "out", "out-integration"]
+}

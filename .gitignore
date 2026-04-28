@@ -1,7 +1,9 @@
 node_modules/
 out/
+out-integration/
 *.vsix
 .vscode-test/
+.vscode-test-extensions/
 media/terminal/vendor/
 media/**/dist/
 coverage/

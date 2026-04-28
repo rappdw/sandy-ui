@@ -17,33 +17,101 @@
     "Other"
   ],
   "main": "./out/extension.js",
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "commands": [
-      { "command": "sandy.launch",                    "title": "Sandy: Launch (in webview tab)" },
-      { "command": "sandy.approval.test",             "title": "Sandy: Test Approval Modal" },
-      { "command": "sandy.settings.open",             "title": "Sandy: Open Settings" },
-      { "command": "sandy.state.refresh",             "title": "Sandy: Refresh State", "icon": "$(refresh)" },
-      { "command": "sandy.tree.launch",               "title": "Launch sandy here" },
-      { "command": "sandy.tree.openWorkspace",        "title": "Open Workspace Folder…" },
-      { "command": "sandy.tree.openWorkspaceNewWin",  "title": "Open Workspace in New Window" },
-      { "command": "sandy.tree.revealSandbox",        "title": "Reveal Sandbox in File Manager" },
-      { "command": "sandy.tree.copyWorkspacePath",    "title": "Copy Workspace Path" },
-      { "command": "sandy.tree.removeLock",           "title": "Remove Lock…" },
-      { "command": "sandy.tree.deleteSandbox",        "title": "Delete Sandbox…" }
+      {
+        "command": "sandy.launch",
+        "title": "Sandy: Launch (in webview tab)"
+      },
+      {
+        "command": "sandy.approval.test",
+        "title": "Sandy: Test Approval Modal"
+      },
+      {
+        "command": "sandy.settings.open",
+        "title": "Sandy: Open Settings"
+      },
+      {
+        "command": "sandy.state.refresh",
+        "title": "Sandy: Refresh State",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "sandy.tree.launch",
+        "title": "Launch sandy here"
+      },
+      {
+        "command": "sandy.tree.openWorkspace",
+        "title": "Open Workspace Folder…"
+      },
+      {
+        "command": "sandy.tree.openWorkspaceNewWin",
+        "title": "Open Workspace in New Window"
+      },
+      {
+        "command": "sandy.tree.revealSandbox",
+        "title": "Reveal Sandbox in File Manager"
+      },
+      {
+        "command": "sandy.tree.copyWorkspacePath",
+        "title": "Copy Workspace Path"
+      },
+      {
+        "command": "sandy.tree.removeLock",
+        "title": "Remove Lock…"
+      },
+      {
+        "command": "sandy.tree.deleteSandbox",
+        "title": "Delete Sandbox…"
+      }
     ],
     "menus": {
       "view/title": [
-        { "command": "sandy.state.refresh", "when": "view == sandy.projects", "group": "navigation" }
+        {
+          "command": "sandy.state.refresh",
+          "when": "view == sandy.projects",
+          "group": "navigation"
+        }
       ],
       "view/item/context": [
-        { "command": "sandy.tree.launch",              "when": "view == sandy.projects && viewItem =~ /^sandbox\\./", "group": "1_run@1" },
-        { "command": "sandy.tree.openWorkspace",       "when": "view == sandy.projects && viewItem =~ /^sandbox\\./", "group": "2_open@1" },
-        { "command": "sandy.tree.openWorkspaceNewWin", "when": "view == sandy.projects && viewItem =~ /^sandbox\\./", "group": "2_open@2" },
-        { "command": "sandy.tree.revealSandbox",       "when": "view == sandy.projects && viewItem =~ /^sandbox\\./", "group": "3_reveal@1" },
-        { "command": "sandy.tree.copyWorkspacePath",   "when": "view == sandy.projects && viewItem =~ /^sandbox\\./", "group": "3_reveal@2" },
-        { "command": "sandy.tree.removeLock",          "when": "view == sandy.projects && viewItem == sandbox.locked", "group": "8_unstick@1" },
-        { "command": "sandy.tree.deleteSandbox",       "when": "view == sandy.projects && viewItem =~ /^sandbox\\./", "group": "9_destructive@1" }
+        {
+          "command": "sandy.tree.launch",
+          "when": "view == sandy.projects && viewItem =~ /^sandbox\\./",
+          "group": "1_run@1"
+        },
+        {
+          "command": "sandy.tree.openWorkspace",
+          "when": "view == sandy.projects && viewItem =~ /^sandbox\\./",
+          "group": "2_open@1"
+        },
+        {
+          "command": "sandy.tree.openWorkspaceNewWin",
+          "when": "view == sandy.projects && viewItem =~ /^sandbox\\./",
+          "group": "2_open@2"
+        },
+        {
+          "command": "sandy.tree.revealSandbox",
+          "when": "view == sandy.projects && viewItem =~ /^sandbox\\./",
+          "group": "3_reveal@1"
+        },
+        {
+          "command": "sandy.tree.copyWorkspacePath",
+          "when": "view == sandy.projects && viewItem =~ /^sandbox\\./",
+          "group": "3_reveal@2"
+        },
+        {
+          "command": "sandy.tree.removeLock",
+          "when": "view == sandy.projects && viewItem == sandbox.locked",
+          "group": "8_unstick@1"
+        },
+        {
+          "command": "sandy.tree.deleteSandbox",
+          "when": "view == sandy.projects && viewItem =~ /^sandbox\\./",
+          "group": "9_destructive@1"
+        }
       ]
     },
     "viewsContainers": {
@@ -95,34 +163,40 @@
     }
   },
   "scripts": {
-    "compile":             "npm run copy-xterm && npm run typecheck:webview && npm run build:webviews && tsc -p ./",
-    "watch":               "tsc -watch -p ./",
-    "watch:webviews":      "node scripts/build-webviews.js --watch",
-    "copy-xterm":          "node scripts/copy-xterm.js",
-    "build:webviews":      "node scripts/build-webviews.js",
-    "typecheck:webview":   "tsc --noEmit -p tsconfig.webview.json",
-    "test":                "vitest run",
-    "test:watch":          "vitest",
-    "test:coverage":       "vitest run --coverage",
-    "vscode:prepublish":   "npm run compile",
-    "package-vsix":        "vsce package",
-    "install-vsix":        "npm run package-vsix && code --install-extension \"$(ls -t *.vsix | head -1)\" --force",
-    "release":             "npm run package-vsix && bash scripts/release.sh"
+    "compile": "npm run copy-xterm && npm run typecheck:webview && npm run build:webviews && tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "watch:webviews": "node scripts/build-webviews.js --watch",
+    "copy-xterm": "node scripts/copy-xterm.js",
+    "build:webviews": "node scripts/build-webviews.js",
+    "typecheck:webview": "tsc --noEmit -p tsconfig.webview.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:integration":         "npm run compile && npm run compile:integration && vscode-test",
+    "compile:integration":      "tsc -p tsconfig.integration.json",
+    "vscode:prepublish": "npm run compile",
+    "package-vsix": "vsce package",
+    "install-vsix": "npm run package-vsix && code --install-extension \"$(ls -t *.vsix | head -1)\" --force",
+    "release": "npm run package-vsix && bash scripts/release.sh"
   },
   "dependencies": {
     "node-pty": "^1.0.0"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",
+    "@types/mocha": "^10.0.10",
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
     "@vitest/coverage-v8": "^4.1.5",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.2.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
     "electron": "^41.3.0",
     "esbuild": "^0.28.0",
+    "mocha": "^11.7.5",
     "typescript": "^5.4.0",
     "vitest": "^4.1.5"
   }

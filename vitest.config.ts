@@ -3,6 +3,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["test/**/*.test.ts"],
+    exclude: ["test/integration/**", "node_modules/**"],
     // Pure-logic tests run in node — no jsdom needed for now. Add an env per
     // file via /// <reference> if any future tests need DOM.
     environment: "node",
