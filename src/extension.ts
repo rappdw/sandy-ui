@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import * as cp from "child_process";
 import * as os from "os";
+import * as path from "path";
 import { openTerminalPanel } from "./terminal/webviewPanel";
 import { showApprovalNative } from "./approval/nativeModal";
 import { openApprovalWebview } from "./approval/webviewModal";
@@ -25,6 +26,26 @@ export function activate(ctx: vscode.ExtensionContext) {
 
   const projects = new ProjectsTreeProvider(poller, supervisor);
 
+  // Status bar item: count of running sandy sessions, click → quick-pick to
+  // switch tabs. Hides when no sessions are live so it doesn't clutter the
+  // status bar of users not currently using sandy. Right-aligned because
+  // the left side is conventionally for editor/file context.
+  const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+  statusBar.command = "sandy.statusbar.click";
+  const refreshStatusBar = () => {
+    if (!supervisor) return;
+    const sessions = supervisor.getAllSessions();
+    if (sessions.length === 0) { statusBar.hide(); return; }
+    const detachedCount = sessions.filter(s => !s.panel).length;
+    statusBar.text = `$(server-process) ${sessions.length} sandy${sessions.length === 1 ? "" : ""}`
+      + (detachedCount > 0 ? ` ($(eye-closed) ${detachedCount} detached)` : "");
+    statusBar.tooltip = sessions
+      .map(s => `${s.workspacePath}  •  ${s.panel ? "attached" : "detached"}  •  pid=${s.pty.pid}`)
+      .join("\n");
+    statusBar.show();
+  };
+  refreshStatusBar();
+
   // Honor a pending launch from a previous-window tree click. When the user
   // clicks a tree item for a different workspace, we openFolder (which
   // reloads VSCode) and stash a marker here; on activation in the new
@@ -36,6 +57,8 @@ export function activate(ctx: vscode.ExtensionContext) {
     projects,
     supervisor,
     stateOut,
+    statusBar,
+    supervisor.onDidChange(refreshStatusBar),
     // If the user updates sandy.binaryPath at runtime, invalidate the
     // resolver cache and trigger a state refresh so the new value is used.
     vscode.workspace.onDidChangeConfiguration(e => {
@@ -53,6 +76,37 @@ export function activate(ctx: vscode.ExtensionContext) {
     vscode.commands.registerCommand("sandy.approval.test", () => runApprovalTest(ctx)),
     vscode.commands.registerCommand("sandy.settings.open", () => openSettingsPanel(ctx)),
     vscode.commands.registerCommand("sandy.state.refresh", () => poller.refresh()),
+
+    // Status bar click: quick-pick to switch between live sandy sessions.
+    // Selecting a session reveals its panel if attached, or invokes launch
+    // (which re-attaches a new panel to the live PTY) if detached.
+    vscode.commands.registerCommand("sandy.statusbar.click", async () => {
+      if (!supervisor) return;
+      const sessions = supervisor.getAllSessions();
+      if (sessions.length === 0) {
+        vscode.window.showInformationMessage("Sandy: no live sessions.");
+        return;
+      }
+      const items = sessions.map(s => ({
+        label: `$(${s.panel ? "terminal" : "eye-closed"}) ${path.basename(s.workspacePath)}`,
+        description: s.workspacePath,
+        detail: s.panel ? `attached  •  pid=${s.pty.pid}` : `detached  •  pid=${s.pty.pid}  •  click to re-attach`,
+        session: s,
+      }));
+      const picked = await vscode.window.showQuickPick(items, {
+        placeHolder: `${sessions.length} live sandy session${sessions.length === 1 ? "" : "s"} — pick to switch / re-attach`,
+      });
+      if (!picked) return;
+      const target = picked.session;
+      if (target.panel) {
+        target.panel.reveal(target.panel.viewColumn ?? vscode.ViewColumn.Active, /* preserveFocus */ false);
+      } else {
+        // Detached — re-attach by invoking the normal launch flow with the
+        // workspace override; openTerminalPanel detects the existing
+        // session and rebinds.
+        await vscode.commands.executeCommand("sandy.launch", { workspacePath: target.workspacePath });
+      }
+    }),
 
     // Tree right-click context menu — every handler receives the SandboxNode
     // (or whatever was right-clicked). VSCode passes it as the first arg.

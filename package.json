@@ -40,6 +40,10 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "sandy.statusbar.click",
+        "title": "Sandy: Switch Session…"
+      },
+      {
         "command": "sandy.tree.launch",
         "title": "Launch sandy here"
       },
