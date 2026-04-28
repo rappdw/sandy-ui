@@ -18,7 +18,8 @@ type ToHost =
 type FromHost =
   | { type: "init"; cols: number; rows: number }
   | { type: "data"; data: string }
-  | { type: "exit"; code: number };
+  | { type: "exit"; code: number }
+  | { type: "refit" };
 
 export async function openTerminalPanel(ctx: vscode.ExtensionContext, workspaceOverride?: string) {
   // Source-of-workspace priority:
@@ -188,6 +189,18 @@ export async function openTerminalPanel(ctx: vscode.ExtensionContext, workspaceO
     if (ptyExited) { log(`pid ${handle.pid} exited after SIGTERM`); return; }
     log(`pid ${handle.pid} unresponsive, sending SIGKILL`);
     handle.kill("SIGKILL");
+  });
+
+  // When the user switches away from the Sandy tab and back, the iframe
+  // briefly drops to zero width and xterm.js settles to a squished few-cols
+  // state. ResizeObserver doesn't re-fire on the way back (DOM size matches
+  // the squished value), so we explicitly tell the webview to refit on
+  // visibility-restore. Bridge handles "refit" with two rAFs to let VSCode's
+  // layout settle before measuring.
+  panel.onDidChangeViewState(e => {
+    if (e.webviewPanel.visible) {
+      panel.webview.postMessage({ type: "refit" });
+    }
   });
 }
 

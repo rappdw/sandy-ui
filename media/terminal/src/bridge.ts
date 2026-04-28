@@ -26,7 +26,8 @@ type ToHost =
 
 type FromHost =
   | { type: "data"; data: string }
-  | { type: "exit"; code: number };
+  | { type: "exit"; code: number }
+  | { type: "refit" };
 
 // ---------------------------------------------------------------------------
 
@@ -165,6 +166,31 @@ type FromHost =
   if (terminalEl) ro.observe(terminalEl);
   window.addEventListener("resize", sendResize);
 
+  // ---- Forced refit on visibility-restore ---------------------------------
+  // When the user switches to a different editor tab and back to Sandy, the
+  // iframe briefly hits zero width and xterm.js settles to a "squished few
+  // cols" state. ResizeObserver doesn't re-fire on the way back (size
+  // matches the squished value from xterm's perspective). Two paths into
+  // refit: (a) host posts {type:"refit"} via onDidChangeViewState, (b)
+  // document.visibilitychange as a backup if the host signal misses.
+  // Both wait two rAFs so VSCode's layout settles before fit.fit() measures.
+  const forceRefit = (reason: string) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const before = `${term.cols}x${term.rows}`;
+      // Reset lastCols/lastRows so sendResize doesn't short-circuit if fit
+      // happens to land on the same numbers we last reported.
+      lastCols = 0; lastRows = 0;
+      try { fit.fit(); }
+      catch (e) { const err = e as { message?: string }; log("refit fit failed", err?.message ?? String(e)); }
+      const after = `${term.cols}x${term.rows}`;
+      log(`refit (${reason}): ${before} → ${after}`);
+      sendResize();
+    }));
+  };
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") forceRefit("visibilitychange");
+  });
+
   // ---- Receive PTY bytes ---------------------------------------------------
   let writes = 0;
   window.addEventListener("message", (e: MessageEvent) => {
@@ -175,6 +201,8 @@ type FromHost =
       term.write(m.data);
     } else if (m.type === "exit") {
       term.write(`\r\n\x1b[2m[process exited ${m.code}]\x1b[0m\r\n`);
+    } else if (m.type === "refit") {
+      forceRefit("host");
     }
   });
 
