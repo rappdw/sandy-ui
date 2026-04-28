@@ -67,17 +67,32 @@ type FromHost =
     return;
   }
 
-  // Build an xterm.js theme from VSCode's terminal CSS variables. These
-  // adapt to whichever color theme the user has active (Dark+, One Dark
-  // Pro, etc.). The previous {background, foreground}-only theme let
-  // xterm.js fill in defaults for the 16 ANSI colors, which are visually
-  // washed-out against dark VSCode backgrounds — particularly brightBlack
-  // (color 8), heavily used by tmux for status-bar dim text.
-  const css = getComputedStyle(document.documentElement);
-  const cssVar = (name: string, fallback?: string): string | undefined => {
-    const v = css.getPropertyValue(name).trim();
-    return v || fallback;
+  // Build an xterm.js theme. Strategy: prefer VSCode's terminal CSS
+  // variables when available (matches the user's active theme), fall
+  // back to a curated dark palette with deliberately stronger brightBlack
+  // than xterm.js's default — that's the gray tmux uses for status bar
+  // dim text and ls colors, and xterm.js's default washes it out.
+  //
+  // CSS custom properties cascade DOWN, not up — VSCode injects
+  // --vscode-* vars on document.body, so reading from documentElement
+  // (html) returns empty. Read from body. Walk up the chain for safety.
+  const cssVar = (name: string, fallback: string): string => {
+    for (const el of [document.body, document.documentElement]) {
+      if (!el) continue;
+      const v = getComputedStyle(el).getPropertyValue(name).trim();
+      if (v) return v;
+    }
+    return fallback;
   };
+
+  // Diagnostic: probe a known VSCode webview variable so we can tell
+  // (in the output channel) whether VSCode-vars are exposed at all.
+  // --vscode-editor-background is universally exposed in webviews.
+  const sentinel = cssVar("--vscode-editor-background", "");
+  log("css-vars: --vscode-editor-background =", sentinel || "(empty)");
+  log("css-vars: --vscode-terminal-background =", cssVar("--vscode-terminal-background", "(empty)"));
+  log("css-vars: --vscode-terminal-ansiBrightBlack =", cssVar("--vscode-terminal-ansiBrightBlack", "(empty)"));
+
   const xtermTheme = {
     background:                cssVar("--vscode-terminal-background",                    "#1e1e1e"),
     foreground:                cssVar("--vscode-terminal-foreground",                    "#d4d4d4"),
@@ -93,7 +108,10 @@ type FromHost =
     magenta:                   cssVar("--vscode-terminal-ansiMagenta",                   "#bc3fbc"),
     cyan:                      cssVar("--vscode-terminal-ansiCyan",                      "#11a8cd"),
     white:                     cssVar("--vscode-terminal-ansiWhite",                     "#e5e5e5"),
-    brightBlack:               cssVar("--vscode-terminal-ansiBrightBlack",               "#666666"),
+    // brightBlack: bumped to #888 (was #666 in earlier attempt). #666 is
+    // still washed out against #1e1e1e at small font sizes. #888 is the
+    // sweet spot — clearly visible, still distinct from foreground.
+    brightBlack:               cssVar("--vscode-terminal-ansiBrightBlack",               "#888888"),
     brightRed:                 cssVar("--vscode-terminal-ansiBrightRed",                 "#f14c4c"),
     brightGreen:               cssVar("--vscode-terminal-ansiBrightGreen",               "#23d18b"),
     brightYellow:              cssVar("--vscode-terminal-ansiBrightYellow",              "#f5f543"),
@@ -102,6 +120,7 @@ type FromHost =
     brightCyan:                cssVar("--vscode-terminal-ansiBrightCyan",                "#29b8db"),
     brightWhite:               cssVar("--vscode-terminal-ansiBrightWhite",               "#e5e5e5"),
   };
+  log("xterm theme background/brightBlack:", xtermTheme.background, xtermTheme.brightBlack);
 
   let term: InstanceType<typeof Terminal>;
   let fit:  InstanceType<typeof FitAddon.FitAddon>;
