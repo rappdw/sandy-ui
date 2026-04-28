@@ -185,7 +185,7 @@
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",
     "@types/mocha": "^10.0.10",
-    "@types/node": "^20.11.0",
+    "@types/node": "^25.6.0",
     "@types/vscode": "^1.85.0",
     "@vitest/coverage-v8": "^4.1.5",
     "@vscode/test-cli": "^0.0.12",
