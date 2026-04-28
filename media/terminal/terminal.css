@@ -1,3 +1,17 @@
-html, body { margin: 0; padding: 0; height: 100%; background: #1e1e1e; }
-#terminal { position: absolute; inset: 0; padding: 4px; }
-.xterm-viewport { background-color: #1e1e1e !important; }
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  /* Match xterm.js's theme background, which we pull from VSCode's
+     terminal CSS variables in bridge.ts. The fallback covers Dark+;
+     light themes will have their own --vscode-terminal-background. */
+  background: var(--vscode-terminal-background, #1e1e1e);
+}
+#terminal {
+  position: absolute;
+  inset: 0;
+  padding: 4px;
+}
+.xterm-viewport {
+  background-color: var(--vscode-terminal-background, #1e1e1e) !important;
+}

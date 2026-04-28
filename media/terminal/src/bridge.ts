@@ -67,6 +67,42 @@ type FromHost =
     return;
   }
 
+  // Build an xterm.js theme from VSCode's terminal CSS variables. These
+  // adapt to whichever color theme the user has active (Dark+, One Dark
+  // Pro, etc.). The previous {background, foreground}-only theme let
+  // xterm.js fill in defaults for the 16 ANSI colors, which are visually
+  // washed-out against dark VSCode backgrounds — particularly brightBlack
+  // (color 8), heavily used by tmux for status-bar dim text.
+  const css = getComputedStyle(document.documentElement);
+  const cssVar = (name: string, fallback?: string): string | undefined => {
+    const v = css.getPropertyValue(name).trim();
+    return v || fallback;
+  };
+  const xtermTheme = {
+    background:                cssVar("--vscode-terminal-background",                    "#1e1e1e"),
+    foreground:                cssVar("--vscode-terminal-foreground",                    "#d4d4d4"),
+    cursor:                    cssVar("--vscode-terminalCursor-foreground",              "#d4d4d4"),
+    cursorAccent:              cssVar("--vscode-terminalCursor-background",              "#1e1e1e"),
+    selectionBackground:       cssVar("--vscode-terminal-selectionBackground",           "#264f78"),
+    selectionInactiveBackground: cssVar("--vscode-terminal-inactiveSelectionBackground", "#3a3d41"),
+    black:                     cssVar("--vscode-terminal-ansiBlack",                     "#000000"),
+    red:                       cssVar("--vscode-terminal-ansiRed",                       "#cd3131"),
+    green:                     cssVar("--vscode-terminal-ansiGreen",                     "#0dbc79"),
+    yellow:                    cssVar("--vscode-terminal-ansiYellow",                    "#e5e510"),
+    blue:                      cssVar("--vscode-terminal-ansiBlue",                      "#2472c8"),
+    magenta:                   cssVar("--vscode-terminal-ansiMagenta",                   "#bc3fbc"),
+    cyan:                      cssVar("--vscode-terminal-ansiCyan",                      "#11a8cd"),
+    white:                     cssVar("--vscode-terminal-ansiWhite",                     "#e5e5e5"),
+    brightBlack:               cssVar("--vscode-terminal-ansiBrightBlack",               "#666666"),
+    brightRed:                 cssVar("--vscode-terminal-ansiBrightRed",                 "#f14c4c"),
+    brightGreen:               cssVar("--vscode-terminal-ansiBrightGreen",               "#23d18b"),
+    brightYellow:              cssVar("--vscode-terminal-ansiBrightYellow",              "#f5f543"),
+    brightBlue:                cssVar("--vscode-terminal-ansiBrightBlue",                "#3b8eea"),
+    brightMagenta:             cssVar("--vscode-terminal-ansiBrightMagenta",             "#d670d6"),
+    brightCyan:                cssVar("--vscode-terminal-ansiBrightCyan",                "#29b8db"),
+    brightWhite:               cssVar("--vscode-terminal-ansiBrightWhite",               "#e5e5e5"),
+  };
+
   let term: InstanceType<typeof Terminal>;
   let fit:  InstanceType<typeof FitAddon.FitAddon>;
   let links: InstanceType<typeof WebLinksAddon.WebLinksAddon>;
@@ -76,9 +112,9 @@ type FromHost =
       convertEol:     false,
       scrollback:     10000,
       allowProposedApi: true,
-      fontFamily:     'Menlo, Consolas, "Courier New", monospace',
-      fontSize:       13,
-      theme: { background: "#1e1e1e", foreground: "#d4d4d4" },
+      fontFamily:     'var(--vscode-editor-font-family, Menlo, Consolas, "Courier New", monospace)',
+      fontSize:       parseInt(cssVar("--vscode-editor-font-size", "13") ?? "13", 10),
+      theme:          xtermTheme,
     });
     log("Terminal constructed");
     fit   = new FitAddon.FitAddon();
