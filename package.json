@@ -60,6 +60,14 @@
         "title": "Copy Workspace Path"
       },
       {
+        "command": "sandy.tree.detach",
+        "title": "Detach (keep sandy running)"
+      },
+      {
+        "command": "sandy.tree.stop",
+        "title": "Stop sandy"
+      },
+      {
         "command": "sandy.tree.removeLock",
         "title": "Remove Lock…"
       },
@@ -101,6 +109,16 @@
           "command": "sandy.tree.copyWorkspacePath",
           "when": "view == sandy.projects && viewItem =~ /^sandbox\\./",
           "group": "3_reveal@2"
+        },
+        {
+          "command": "sandy.tree.detach",
+          "when": "view == sandy.projects && viewItem == sandbox.running",
+          "group": "5_session@1"
+        },
+        {
+          "command": "sandy.tree.stop",
+          "when": "view == sandy.projects && viewItem == sandbox.running",
+          "group": "5_session@2"
         },
         {
           "command": "sandy.tree.removeLock",

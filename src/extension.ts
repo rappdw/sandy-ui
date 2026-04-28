@@ -9,12 +9,19 @@ import { ProjectsTreeProvider } from "./projectsTree";
 import { StatePoller } from "./state/poller";
 import { deleteSandboxDir, removeLockForSandbox, lockPathForSandbox } from "./state/deleteSandbox";
 import { invalidateSandyPathCache } from "./state/sandyPath";
-import { snapshotLivePtys, waitForExits } from "./terminal/registry";
+import { PtySupervisor } from "./terminal/supervisor";
+
+// Module-level so deactivate() can reach the supervisor (deactivate doesn't
+// receive ctx in the same way activate does, and the supervisor needs
+// to drive shutdown across all live sessions).
+let supervisor: PtySupervisor | undefined;
 
 export function activate(ctx: vscode.ExtensionContext) {
   const stateOut = vscode.window.createOutputChannel("Sandy State");
   const poller   = new StatePoller(/* intervalMs */ 5_000, stateOut);
   poller.start();
+
+  supervisor = new PtySupervisor(stateOut);
 
   const projects = new ProjectsTreeProvider(poller);
 
@@ -27,6 +34,7 @@ export function activate(ctx: vscode.ExtensionContext) {
   ctx.subscriptions.push(
     poller,
     projects,
+    supervisor,
     stateOut,
     // If the user updates sandy.binaryPath at runtime, invalidate the
     // resolver cache and trigger a state refresh so the new value is used.
@@ -70,6 +78,35 @@ export function activate(ctx: vscode.ExtensionContext) {
       const sandboxPath = node?.sandbox?.path;
       if (!sandboxPath) return vscode.window.showWarningMessage("No sandbox path on this entry.");
       revealInOSFileManager(sandboxPath);
+    }),
+    vscode.commands.registerCommand("sandy.tree.detach", async (node: any) => {
+      const ws = node?.sandbox?.workspace_path;
+      if (!ws || !supervisor) return;
+      const session = supervisor.getSession(ws);
+      if (!session) {
+        vscode.window.showInformationMessage(`Sandy: no live session for ${ws} — nothing to detach.`);
+        return;
+      }
+      const panel = session.panel;
+      // Order matters: clear session.panel BEFORE disposing the panel so
+      // the panel-dispose handler in webviewPanel.ts sees the detached state
+      // and skips the kill-the-PTY path.
+      supervisor.detach(ws);
+      try { panel?.dispose(); } catch { /* swallow */ }
+      vscode.window.setStatusBarMessage(`Sandy: detached session for ${ws} (sandy still running)`, 5_000);
+    }),
+    vscode.commands.registerCommand("sandy.tree.stop", async (node: any) => {
+      const ws = node?.sandbox?.workspace_path;
+      if (!ws || !supervisor) return;
+      const session = supervisor.getSession(ws);
+      if (!session) {
+        vscode.window.showInformationMessage(`Sandy: no live session for ${ws}.`);
+        return;
+      }
+      vscode.window.setStatusBarMessage(`Sandy: stopping ${ws}…`, 5_000);
+      await supervisor.stop(ws);
+      try { session.panel?.dispose(); } catch { /* swallow */ }
+      void poller.refresh();
     }),
     vscode.commands.registerCommand("sandy.tree.copyWorkspacePath", async (node: any) => {
       const ws = node?.sandbox?.workspace_path;
@@ -164,37 +201,12 @@ export function activate(ctx: vscode.ExtensionContext) {
   );
 }
 
-// VSCode awaits the Promise returned from deactivate() (with a few-seconds
-// budget) before killing the extension host. Use that window to give every
-// live sandy a SIGINT in parallel — their cleanup traps (docker stop,
-// docker network rm) run concurrently rather than serially via per-tab
-// onDidDispose, and concurrently with VSCode's own teardown.
-//
-// Per-tab onDidDispose still runs for tab-close-while-VSCode-is-up; the two
-// paths are coordinated by the registry's `exited` flag (no double-signal).
+// VSCode awaits the Promise returned from deactivate() (~5s budget) before
+// killing the extension host. Delegate to the supervisor which parallel-
+// SIGINTs every live session — cleanup traps (docker stop, docker network
+// rm) run concurrently rather than serially via per-tab onDidDispose.
 export async function deactivate(): Promise<void> {
-  const live = snapshotLivePtys();
-  if (live.length === 0) return;
-
-  // SIGINT all live PTYs immediately so cleanup traps run in parallel.
-  for (const { pty } of live) {
-    try { pty.kill("SIGINT"); } catch { /* PTY may have died between snapshot and kill */ }
-  }
-
-  // Wait up to 4s for everyone to exit cleanly. VSCode typically allows ~5s
-  // for deactivate before force-killing the extension host; we leave a small
-  // headroom for the SIGTERM/SIGKILL escalation below to also race in.
-  const survivors = await waitForExits(live.map(l => l.pty), 4_000);
-  if (survivors === 0) return;
-
-  // Anyone still alive: SIGTERM, brief wait, SIGKILL.
-  for (const { pty } of live) {
-    try { pty.kill("SIGTERM"); } catch { /* swallow */ }
-  }
-  await new Promise(r => setTimeout(r, 800));
-  for (const { pty } of live) {
-    try { pty.kill("SIGKILL"); } catch { /* swallow */ }
-  }
+  await supervisor?.disposeAll();
 }
 
 async function runApprovalTest(ctx: vscode.ExtensionContext) {
@@ -244,20 +256,22 @@ async function launchWithWorkspaceSwitch(
   targetWs: string | undefined,
   out: vscode.OutputChannel,
 ): Promise<void> {
+  if (!supervisor) return;  // not activated yet (shouldn't happen in practice)
   // No target — defer to openTerminalPanel which prompts for a folder.
-  if (!targetWs) return openTerminalPanel(ctx, undefined);
+  if (!targetWs) return openTerminalPanel(ctx, supervisor, undefined);
 
   const currentWs = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
   if (currentWs && currentWs === targetWs) {
-    // Already in the right workspace — just launch.
-    return openTerminalPanel(ctx, targetWs);
+    // Already in the right workspace — just launch (or re-attach if a
+    // detached session exists for this workspace).
+    return openTerminalPanel(ctx, supervisor, targetWs);
   }
 
   if (!currentWs) {
     // No folder open at all — no reload needed; openTerminalPanel will use
     // the override directly. (Equivalent to "Launch here" in an empty window.)
-    return openTerminalPanel(ctx, targetWs);
+    return openTerminalPanel(ctx, supervisor, targetWs);
   }
 
   // Workspace mismatch — switch by openFolder (reloads VSCode), and persist

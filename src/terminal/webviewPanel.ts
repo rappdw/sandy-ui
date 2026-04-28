@@ -1,9 +1,9 @@
 import * as vscode from "vscode";
-import { spawnPty, launchCandidates, buildCleanEnv, PtyHandle } from "./pty";
+import { launchCandidates, buildCleanEnv } from "./pty";
 import { OscEvent } from "./oscHandler";
 import { sweepStaleLocks } from "./sandyState";
 import { checkPreflightApproval } from "../approval/preflight";
-import { registerPty, unregisterPty } from "./registry";
+import { PtySupervisor, Session } from "./supervisor";
 
 const out = vscode.window.createOutputChannel("Sandy");
 const log = (msg: string) => out.appendLine(`[${new Date().toISOString()}] ${msg}`);
@@ -22,7 +22,11 @@ type FromHost =
   | { type: "exit"; code: number }
   | { type: "refit" };
 
-export async function openTerminalPanel(ctx: vscode.ExtensionContext, workspaceOverride?: string) {
+export async function openTerminalPanel(
+  ctx: vscode.ExtensionContext,
+  supervisor: PtySupervisor,
+  workspaceOverride?: string,
+) {
   // Source-of-workspace priority:
   //   1. Explicit override (from tree-item click — sandy.launch invoked with
   //      { workspacePath } argument)
@@ -43,21 +47,29 @@ export async function openTerminalPanel(ctx: vscode.ExtensionContext, workspaceO
     ws = picked[0].fsPath;
   }
 
-  // Pre-flight approval check. Runs `sandy --validate-config` and shows the
-  // approval modal if the workspace config has privileged keys requiring
-  // explicit approval. Errors from validate are non-fatal — we proceed and
-  // let sandy itself enforce approval at launch time.
-  const preflight = await checkPreflightApproval(ctx, ws);
-  if (preflight.error) log(`preflight: ${preflight.error} (proceeding; sandy will enforce)`);
-  if (preflight.validation?.approval_status) log(`preflight: approval_status=${preflight.validation.approval_status}`);
-  if (!preflight.proceed) {
-    log("preflight: user rejected — launch cancelled");
-    return;
+  // If a session already exists for this workspace, this is a re-attach —
+  // skip preflight (already done at original spawn) and reuse the live PTY.
+  const existingSession = supervisor.getSession(ws);
+  const isReattach = existingSession !== undefined;
+
+  let approveEnv: Record<string, string> = {};
+  if (!isReattach) {
+    // Pre-flight approval check. Runs `sandy --validate-config` and shows
+    // the approval modal if the workspace config has privileged keys
+    // requiring explicit approval. Errors from validate are non-fatal —
+    // we proceed and let sandy itself enforce approval at launch time.
+    const preflight = await checkPreflightApproval(ctx, ws);
+    if (preflight.error) log(`preflight: ${preflight.error} (proceeding; sandy will enforce)`);
+    if (preflight.validation?.approval_status) log(`preflight: approval_status=${preflight.validation.approval_status}`);
+    if (!preflight.proceed) {
+      log("preflight: user rejected — launch cancelled");
+      return;
+    }
+    approveEnv = preflight.setApproveEnv ? { SANDY_AUTO_APPROVE_PRIVILEGED: "1" } : {};
+    if (preflight.setApproveEnv) log("preflight: SANDY_AUTO_APPROVE_PRIVILEGED=1 set for THIS launch only");
+  } else {
+    log(`re-attaching to existing session for workspace=${ws}`);
   }
-  const approveEnv: Record<string, string> = preflight.setApproveEnv
-    ? { SANDY_AUTO_APPROVE_PRIVILEGED: "1" }
-    : {};
-  if (preflight.setApproveEnv) log("preflight: SANDY_AUTO_APPROVE_PRIVILEGED=1 set for THIS launch only");
 
   // Maximize editor space for the sandy session if the user has opted in
   // (defaults: bottom panel + auxiliary bar closed; primary sidebar kept).
@@ -88,20 +100,39 @@ export async function openTerminalPanel(ctx: vscode.ExtensionContext, workspaceO
     css:        mediaUri("terminal.css"),
   });
 
-  let pty: PtyHandle | undefined;
-  let ptyExited = false;
-  let dataChunks = 0;
-  const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+  // The session this panel will be bound to. Either we re-attach to an
+  // existing live PTY, or we spawn a new one inside the "ready" handler
+  // once we know the webview's measured cols/rows.
+  let session: Session | undefined;
 
-  log(`openTerminalPanel: workspace=${ws}`);
+  log(`openTerminalPanel: workspace=${ws}${isReattach ? " (re-attach)" : ""}`);
 
   const sub = panel.webview.onDidReceiveMessage((m: ToHost) => {
     switch (m.type) {
       case "ready": {
         log(`webview ready (initial size ${m.cols}x${m.rows})`);
 
-        // Stale-lock sweep before launch. VSCode reload / crash interrupts
-        // sandy's cleanup trap and leaves locks behind that block re-launch.
+        if (isReattach && existingSession) {
+          // Re-attach: skip lock sweep, skip spawn. Just bind the panel
+          // to the existing PTY and resize to the new panel's dimensions.
+          session = existingSession;
+          supervisor.attach(ws!, panel);
+          try { session.pty.resize(m.cols || 80, m.rows || 24); }
+          catch (e: any) { log(`re-attach resize failed: ${e?.message ?? e}`); }
+          panel.title = `Sandy (re-attached pid=${session.pty.pid})`;
+          // Sandy's inner tmux preserves the live screen — first interaction
+          // (or the next periodic refresh) will repaint. No scrollback replay
+          // for now; that's a future enhancement.
+          panel.webview.postMessage(<FromHost>{
+            type: "data",
+            data: `\r\n\x1b[2m[re-attached to existing sandy pid=${session.pty.pid} — press Enter to refresh display]\x1b[0m\r\n`,
+          });
+          break;
+        }
+
+        // Fresh spawn path. Stale-lock sweep first — VSCode reload / crash
+        // interrupts sandy's cleanup trap and leaves locks behind that
+        // block re-launch.
         try {
           const sweep = sweepStaleLocks(ws);
           if (sweep.cleaned.length) log(`cleaned ${sweep.cleaned.length} stale lock(s): ${sweep.cleaned.join(", ")}`);
@@ -121,14 +152,18 @@ export async function openTerminalPanel(ctx: vscode.ExtensionContext, workspaceO
           : launchCandidates();
         log(`candidates: ${candidates.map(c => `${c.command} ${c.args.join(" ")}`.trim()).join("  |  ")}`);
 
-        let chosen: { command: string; args: string[] } | undefined;
         const errors: string[] = [];
         for (const c of candidates) {
           try {
             log(`trying: ${c.command} ${c.args.join(" ")}`);
-            pty = spawnPty({ command: c.command, args: c.args, cwd: ws, env, cols: m.cols || 80, rows: m.rows || 24 });
-            chosen = c;
-            log(`spawned: ${c.command} pid=${pty.pid}`);
+            session = supervisor.spawn({
+              workspacePath: ws,
+              command: c.command, args: c.args,
+              cwd: ws, env,
+              cols: m.cols || 80, rows: m.rows || 24,
+            });
+            log(`spawned: ${c.command} pid=${session.pty.pid}`);
+            panel.title = `Sandy (${c.command.split("/").pop()} ${c.args.join(" ")})`.trim();
             break;
           } catch (e: any) {
             const msg = `${c.command}: ${e?.message ?? e}`;
@@ -136,32 +171,21 @@ export async function openTerminalPanel(ctx: vscode.ExtensionContext, workspaceO
             log(`spawn failed for ${msg}`);
           }
         }
-        if (!pty || !chosen) {
+        if (!session) {
           const msg = `All launch candidates failed:\n  ${errors.join("\n  ")}`;
           vscode.window.showErrorMessage(`Sandy: ${errors[errors.length - 1] ?? "no command worked"}`);
           panel.webview.postMessage(<FromHost>{ type: "data", data: `\r\n\x1b[31m[host] ${msg}\x1b[0m\r\n` });
           return;
         }
-        // Register in the module-level live-PTY set so deactivate() can
-        // signal everything in parallel when VSCode quits.
-        registerPty(pty, `${chosen.command.split("/").pop()} pid=${pty.pid} (${ws})`);
-        pty.onData((d) => {
-          dataChunks++;
-          if (dataChunks <= 3 || dataChunks % 50 === 0) log(`pty→webview chunk #${dataChunks} (${d.length} bytes)`);
-          panel.webview.postMessage(<FromHost>{ type: "data", data: d });
-        });
-        pty.onExit((code) => {
-          ptyExited = true;
-          unregisterPty(pty!);
-          log(`pty exited code=${code} (after ${dataChunks} chunks)`);
-          panel.webview.postMessage(<FromHost>{ type: "exit", code });
+        supervisor.attach(ws, panel);
+        // Title flip on exit (data flow + exit posting handled by supervisor).
+        session.pty.onExit((code) => {
           panel.title = `Sandy (exit ${code})`;
         });
-        panel.title = `Sandy (${chosen.command.split("/").pop()} ${chosen.args.join(" ")})`.trim();
         break;
       }
-      case "input":  pty?.write(m.data); break;
-      case "resize": log(`resize ${m.cols}x${m.rows}`); pty?.resize(m.cols, m.rows); break;
+      case "input":  session?.pty.write(m.data); break;
+      case "resize": log(`resize ${m.cols}x${m.rows}`); session?.pty.resize(m.cols, m.rows); break;
       case "osc":    handleOsc(panel, m.event); break;
       case "log":    log(`[webview ${m.level}] ${m.msg}`); break;
     }
@@ -175,25 +199,23 @@ export async function openTerminalPanel(ctx: vscode.ExtensionContext, workspaceO
     out.show(true);
   }
 
-  // Proper signal escalation per SPEC §"Session supervisor":
-  // SIGINT (give cleanup trap a chance) → SIGTERM → SIGKILL.
-  // Without the wait between signals, sandy's cleanup trap is interrupted
-  // by SIGHUP from PTY closure and stale lock files survive in
-  // ~/.sandy/sandboxes/.
+  // On tab close: distinguish detach (user invoked sandy.tree.detach which
+  // cleared session.panel before disposing) from a normal close (user
+  // wants the session stopped). Supervisor's signal escalation handles
+  // the actual stop; we only call supervisor.stop() if the session is
+  // still attached when the panel disposes.
   panel.onDidDispose(async () => {
     sub.dispose();
-    if (!pty || ptyExited) return;
-    const handle = pty;
-    log(`tab disposed, escalating shutdown for pid ${handle.pid}`);
-    handle.kill("SIGINT");
-    await sleep(3000);
-    if (ptyExited) { log(`pid ${handle.pid} exited cleanly after SIGINT`); return; }
-    log(`pid ${handle.pid} still alive, sending SIGTERM`);
-    handle.kill("SIGTERM");
-    await sleep(2000);
-    if (ptyExited) { log(`pid ${handle.pid} exited after SIGTERM`); return; }
-    log(`pid ${handle.pid} unresponsive, sending SIGKILL`);
-    handle.kill("SIGKILL");
+    if (!session) return;
+    // If supervisor's session.panel === undefined OR points elsewhere,
+    // this dispose is from a detach (already handled) or from a stale
+    // close (another panel took over) — don't kill.
+    if (session.panel !== panel) {
+      log(`tab disposed but session is detached/reassigned for ${ws} — leaving PTY alive`);
+      return;
+    }
+    log(`tab closed, stopping session for workspace=${ws}`);
+    await supervisor.stop(ws);
   });
 
   // When the user switches away from the Sandy tab and back, the iframe
