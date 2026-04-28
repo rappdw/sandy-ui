@@ -65,7 +65,7 @@
       },
       {
         "command": "sandy.tree.detach",
-        "title": "Detach (keep sandy running)"
+        "title": "Detach (this VSCode session)"
       },
       {
         "command": "sandy.tree.stop",
