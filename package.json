@@ -2,7 +2,7 @@
   "name": "sandy-ui",
   "displayName": "Sandy UI",
   "description": "VSCode extension wrapping the sandy CLI — webview-hosted terminal, schema-driven settings, pre-flight approvals.",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "publisher": "rappdw",
   "private": true,
   "repository": {
