@@ -9,6 +9,7 @@ import { ProjectsTreeProvider } from "./projectsTree";
 import { StatePoller } from "./state/poller";
 import { deleteSandboxDir, removeLockForSandbox, lockPathForSandbox } from "./state/deleteSandbox";
 import { invalidateSandyPathCache } from "./state/sandyPath";
+import { snapshotLivePtys, waitForExits } from "./terminal/registry";
 
 export function activate(ctx: vscode.ExtensionContext) {
   const stateOut = vscode.window.createOutputChannel("Sandy State");
@@ -163,7 +164,38 @@ export function activate(ctx: vscode.ExtensionContext) {
   );
 }
 
-export function deactivate() { /* webviews and PTYs dispose themselves; poller via subscriptions */ }
+// VSCode awaits the Promise returned from deactivate() (with a few-seconds
+// budget) before killing the extension host. Use that window to give every
+// live sandy a SIGINT in parallel — their cleanup traps (docker stop,
+// docker network rm) run concurrently rather than serially via per-tab
+// onDidDispose, and concurrently with VSCode's own teardown.
+//
+// Per-tab onDidDispose still runs for tab-close-while-VSCode-is-up; the two
+// paths are coordinated by the registry's `exited` flag (no double-signal).
+export async function deactivate(): Promise<void> {
+  const live = snapshotLivePtys();
+  if (live.length === 0) return;
+
+  // SIGINT all live PTYs immediately so cleanup traps run in parallel.
+  for (const { pty } of live) {
+    try { pty.kill("SIGINT"); } catch { /* PTY may have died between snapshot and kill */ }
+  }
+
+  // Wait up to 4s for everyone to exit cleanly. VSCode typically allows ~5s
+  // for deactivate before force-killing the extension host; we leave a small
+  // headroom for the SIGTERM/SIGKILL escalation below to also race in.
+  const survivors = await waitForExits(live.map(l => l.pty), 4_000);
+  if (survivors === 0) return;
+
+  // Anyone still alive: SIGTERM, brief wait, SIGKILL.
+  for (const { pty } of live) {
+    try { pty.kill("SIGTERM"); } catch { /* swallow */ }
+  }
+  await new Promise(r => setTimeout(r, 800));
+  for (const { pty } of live) {
+    try { pty.kill("SIGKILL"); } catch { /* swallow */ }
+  }
+}
 
 async function runApprovalTest(ctx: vscode.ExtensionContext) {
   const choice = await vscode.window.showQuickPick(

@@ -3,6 +3,7 @@ import { spawnPty, launchCandidates, buildCleanEnv, PtyHandle } from "./pty";
 import { OscEvent } from "./oscHandler";
 import { sweepStaleLocks } from "./sandyState";
 import { checkPreflightApproval } from "../approval/preflight";
+import { registerPty, unregisterPty } from "./registry";
 
 const out = vscode.window.createOutputChannel("Sandy");
 const log = (msg: string) => out.appendLine(`[${new Date().toISOString()}] ${msg}`);
@@ -141,6 +142,9 @@ export async function openTerminalPanel(ctx: vscode.ExtensionContext, workspaceO
           panel.webview.postMessage(<FromHost>{ type: "data", data: `\r\n\x1b[31m[host] ${msg}\x1b[0m\r\n` });
           return;
         }
+        // Register in the module-level live-PTY set so deactivate() can
+        // signal everything in parallel when VSCode quits.
+        registerPty(pty, `${chosen.command.split("/").pop()} pid=${pty.pid} (${ws})`);
         pty.onData((d) => {
           dataChunks++;
           if (dataChunks <= 3 || dataChunks % 50 === 0) log(`pty→webview chunk #${dataChunks} (${d.length} bytes)`);
@@ -148,6 +152,7 @@ export async function openTerminalPanel(ctx: vscode.ExtensionContext, workspaceO
         });
         pty.onExit((code) => {
           ptyExited = true;
+          unregisterPty(pty!);
           log(`pty exited code=${code} (after ${dataChunks} chunks)`);
           panel.webview.postMessage(<FromHost>{ type: "exit", code });
           panel.title = `Sandy (exit ${code})`;
