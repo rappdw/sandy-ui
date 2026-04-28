@@ -112,12 +112,12 @@
         },
         {
           "command": "sandy.tree.detach",
-          "when": "view == sandy.projects && viewItem == sandbox.running",
+          "when": "view == sandy.projects && viewItem =~ /^sandbox\\.(running|locked)$/",
           "group": "5_session@1"
         },
         {
           "command": "sandy.tree.stop",
-          "when": "view == sandy.projects && viewItem == sandbox.running",
+          "when": "view == sandy.projects && viewItem =~ /^sandbox\\.(running|locked)$/",
           "group": "5_session@2"
         },
         {

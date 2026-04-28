@@ -4,26 +4,36 @@ import * as os from "os";
 import { StatePoller, StateResolution } from "./state/poller";
 import { deriveBadge, SandboxBadge } from "./state/badge";
 import type { SandySandbox } from "./state/types";
+import type { PtySupervisor } from "./terminal/supervisor";
 
-// Tree provider backed by `sandy --print-state` polling. Each top-level
-// item is a sandbox; clicking a sandbox launches sandy against its
-// workspace_path.
+// Tree provider backed by `sandy --print-state` polling AND the
+// PtySupervisor's view of which workspaces have a live PTY. Supervisor's
+// view outranks sandy's running_containers report — if WE spawned a sandy
+// and have a session for it, the badge shows "running" immediately, even
+// if sandy --print-state hasn't caught up (or is buggy and the container
+// info doesn't match the sandbox name).
 //
-// When sandy is unreachable (not on PATH or --print-state errors), the tree
-// falls back to a single "current workspace" placeholder so the launch
-// command still works.
+// When sandy is unreachable (not on PATH or --print-state errors), the
+// tree falls back to a single "current workspace" placeholder so the
+// launch command still works.
 
 export class ProjectsTreeProvider implements vscode.TreeDataProvider<TreeNode>, vscode.Disposable {
   private readonly _onDidChangeTreeData = new vscode.EventEmitter<TreeNode | undefined>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
-  private readonly subscription: vscode.Disposable;
+  private readonly subscriptions: vscode.Disposable[] = [];
 
-  constructor(private readonly poller: StatePoller) {
-    this.subscription = poller.onDidChange(() => this._onDidChangeTreeData.fire(undefined));
+  constructor(
+    private readonly poller: StatePoller,
+    private readonly supervisor: PtySupervisor,
+  ) {
+    this.subscriptions.push(
+      poller.onDidChange(() => this._onDidChangeTreeData.fire(undefined)),
+      supervisor.onDidChange(() => this._onDidChangeTreeData.fire(undefined)),
+    );
   }
 
   dispose(): void {
-    this.subscription.dispose();
+    for (const s of this.subscriptions) s.dispose();
     this._onDidChangeTreeData.dispose();
   }
 
@@ -33,13 +43,16 @@ export class ProjectsTreeProvider implements vscode.TreeDataProvider<TreeNode>, 
 
   getChildren(): TreeNode[] {
     const r = this.poller.current();
-    return buildNodes(r);
+    const supervisorWorkspaces = new Set(
+      this.supervisor.getAllSessions().map(s => s.workspacePath),
+    );
+    return buildNodes(r, supervisorWorkspaces);
   }
 }
 
 type TreeNode = SandboxNode | StatusNode | EmptyNode;
 
-function buildNodes(r: StateResolution): TreeNode[] {
+function buildNodes(r: StateResolution, supervisorWorkspaces: ReadonlySet<string>): TreeNode[] {
   // Initial state (poll hasn't returned yet): show a loading placeholder.
   if (!r.state && !r.error && r.fetched_at.getTime() === 0) {
     return [new StatusNode("Loading…", "loading", "Polling sandy --print-state")];
@@ -74,7 +87,7 @@ function buildNodes(r: StateResolution): TreeNode[] {
   } else {
     for (const s of sandboxes) {
       try {
-        const badge = deriveBadge(s, state.running_containers);
+        const badge = deriveBadge(s, state.running_containers, { supervisorRunningWorkspaces: supervisorWorkspaces });
         nodes.push(new SandboxNode(s, badge));
       } catch (e: any) {
         // One malformed sandbox entry shouldn't break the entire tree.

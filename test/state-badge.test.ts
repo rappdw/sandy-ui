@@ -16,6 +16,32 @@ const container = (sandbox: string): SandyRunningContainer => ({
 });
 
 describe("deriveBadge", () => {
+  describe("supervisor view (highest priority)", () => {
+    it("returns 'running' when supervisor has the workspace, even if running_containers is empty", () => {
+      const s = sb({ workspace_path: "/x/myproj", lock_held: true });
+      const supervisorRunningWorkspaces = new Set(["/x/myproj"]);
+      expect(deriveBadge(s, [], { now: NOW, supervisorRunningWorkspaces })).toBe("running");
+    });
+
+    it("returns 'running' when supervisor has the workspace, even if running_containers is null (docker unreachable)", () => {
+      const s = sb({ workspace_path: "/x/myproj" });
+      const supervisorRunningWorkspaces = new Set(["/x/myproj"]);
+      expect(deriveBadge(s, null, { now: NOW, supervisorRunningWorkspaces })).toBe("running");
+    });
+
+    it("falls through to print-state derivation when supervisor doesn't have the workspace", () => {
+      const s = sb({ workspace_path: "/x/myproj", lock_held: true });
+      const supervisorRunningWorkspaces = new Set(["/different/workspace"]);
+      expect(deriveBadge(s, [], { now: NOW, supervisorRunningWorkspaces })).toBe("locked");
+    });
+
+    it("ignores supervisor view when sandbox has no workspace_path (can't match)", () => {
+      const s = sb({ workspace_path: undefined as unknown as string, lock_held: true });
+      const supervisorRunningWorkspaces = new Set(["/some/path"]);
+      expect(deriveBadge(s, [], { now: NOW, supervisorRunningWorkspaces })).toBe("locked");
+    });
+  });
+
   describe("running", () => {
     it("wins over lock_held when a container exists for this sandbox", () => {
       const s = sb({ lock_held: true });

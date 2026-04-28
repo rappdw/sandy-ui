@@ -23,7 +23,7 @@ export function activate(ctx: vscode.ExtensionContext) {
 
   supervisor = new PtySupervisor(stateOut);
 
-  const projects = new ProjectsTreeProvider(poller);
+  const projects = new ProjectsTreeProvider(poller, supervisor);
 
   // Honor a pending launch from a previous-window tree click. When the user
   // clicks a tree item for a different workspace, we openFolder (which
