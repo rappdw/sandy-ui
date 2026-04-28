@@ -28,20 +28,20 @@ const EXPECTED_COMMANDS = [
   "sandy.tree.deleteSandbox",
 ];
 
-suite("Extension activation", () => {
-  test("extension is present", () => {
+describe("Extension activation", () => {
+  it("extension is present", () => {
     const ext = vscode.extensions.getExtension(EXTENSION_ID);
     assert.ok(ext, `extension ${EXTENSION_ID} not found — is it installed in the test runtime?`);
   });
 
-  test("extension activates without throwing", async () => {
+  it("extension activates without throwing", async () => {
     const ext = vscode.extensions.getExtension(EXTENSION_ID);
     assert.ok(ext, "extension not present");
     await ext.activate();
     assert.ok(ext.isActive, "extension failed to activate");
   });
 
-  test("every contributed command is registered after activation", async () => {
+  it("every contributed command is registered after activation", async () => {
     await vscode.extensions.getExtension(EXTENSION_ID)?.activate();
     const all = await vscode.commands.getCommands(/* filterInternal */ true);
     const missing = EXPECTED_COMMANDS.filter(c => !all.includes(c));
@@ -49,15 +49,15 @@ suite("Extension activation", () => {
   });
 });
 
-suite("Configuration contributions", () => {
-  test("sandy.binaryPath is contributed and reads as a string with default ''", () => {
+describe("Configuration contributions", () => {
+  it("sandy.binaryPath is contributed and reads as a string with default ''", () => {
     const cfg = vscode.workspace.getConfiguration("sandy");
     const v = cfg.get<string>("binaryPath");
     assert.strictEqual(typeof v, "string");
     assert.strictEqual(v, "");  // default
   });
 
-  test("sandy.launch.* booleans are contributed with expected defaults", () => {
+  it("sandy.launch.* booleans are contributed with expected defaults", () => {
     const cfg = vscode.workspace.getConfiguration("sandy.launch");
     assert.strictEqual(cfg.get<boolean>("closeBottomPanel"),  true);
     assert.strictEqual(cfg.get<boolean>("closeAuxiliaryBar"), true);
@@ -65,7 +65,7 @@ suite("Configuration contributions", () => {
   });
 });
 
-suite("Webview commands open panels", () => {
+describe("Webview commands open panels", () => {
   // Webview internals (CSP-sandboxed) aren't reachable from the test runtime,
   // but we can verify that invoking the command results in a webview panel
   // appearing in the editor area. Uses tabGroups to count panels before/after.
@@ -84,13 +84,13 @@ suite("Webview commands open panels", () => {
     if (tabs.length > 0) await vscode.window.tabGroups.close(tabs);
   }
 
-  setup(async () => {
+  beforeEach(async () => {
     await vscode.extensions.getExtension(EXTENSION_ID)?.activate();
     await closeAllWebviews();
   });
-  teardown(async () => { await closeAllWebviews(); });
+  afterEach(async () => { await closeAllWebviews(); });
 
-  test("sandy.settings.open creates a webview panel", async () => {
+  it("sandy.settings.open creates a webview panel", async () => {
     const before = countWebviewTabs();
     await vscode.commands.executeCommand("sandy.settings.open");
     // Give VSCode a tick to register the new tab.
