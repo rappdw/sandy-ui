@@ -31,7 +31,12 @@ describe("resolveSandyBinary — explicit override", () => {
     expect(resolveSandyBinary()).toBe(exe);
   });
 
-  it("returns undefined when override is set but file is non-executable", () => {
+  // Windows doesn't have a Unix exec-bit — fs.accessSync(file, X_OK) returns
+  // success for any readable file; executability is extension-based instead
+  // (.exe / .cmd / .bat). The "non-executable file" assertion only makes
+  // sense on POSIX. Sandy itself is a bash script that needs WSL on Windows,
+  // so the production resolver's Unix-style check is fine for that path too.
+  it.skipIf(process.platform === "win32")("returns undefined when override is set but file is non-executable", () => {
     const f = path.join(tmp, "sandy");
     fs.writeFileSync(f, "#!/bin/sh\necho\n");  // no exec bit
     fs.chmodSync(f, 0o644);
@@ -67,7 +72,8 @@ describe("resolveSandyBinary — PATH lookup", () => {
     }
   });
 
-  it("PATH lookup respects executable bit (skips non-exec entries)", () => {
+  // Same Windows caveat as the override-non-executable test above — POSIX only.
+  it.skipIf(process.platform === "win32")("PATH lookup respects executable bit (skips non-exec entries)", () => {
     const f = path.join(tmp, "sandy");
     fs.writeFileSync(f, "not exec");
     fs.chmodSync(f, 0o644);
