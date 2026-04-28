@@ -113,20 +113,33 @@ export async function openTerminalPanel(
         log(`webview ready (initial size ${m.cols}x${m.rows})`);
 
         if (isReattach && existingSession) {
-          // Re-attach: skip lock sweep, skip spawn. Just bind the panel
-          // to the existing PTY and resize to the new panel's dimensions.
+          // Re-attach: skip lock sweep, skip spawn. Bind the panel to the
+          // existing PTY and force a tmux repaint so the user sees the
+          // current screen state. tmux only emits diffs from what it
+          // thinks the terminal is showing — the fresh xterm.js has no
+          // history, so we need to provoke a full redraw. Resize-toggle
+          // (rows → rows-1 → rows) triggers SIGWINCH which tmux always
+          // responds to with a full screen redraw. Two short delays so
+          // the resizes register as distinct events.
           session = existingSession;
           supervisor.attach(ws!, panel);
-          try { session.pty.resize(m.cols || 80, m.rows || 24); }
-          catch (e: any) { log(`re-attach resize failed: ${e?.message ?? e}`); }
           panel.title = `Sandy (re-attached pid=${session.pty.pid})`;
-          // Sandy's inner tmux preserves the live screen — first interaction
-          // (or the next periodic refresh) will repaint. No scrollback replay
-          // for now; that's a future enhancement.
           panel.webview.postMessage(<FromHost>{
             type: "data",
-            data: `\r\n\x1b[2m[re-attached to existing sandy pid=${session.pty.pid} — press Enter to refresh display]\x1b[0m\r\n`,
+            data: `\r\n\x1b[2m[re-attached to existing sandy pid=${session.pty.pid}]\x1b[0m\r\n`,
           });
+          const cols = m.cols || 80;
+          const rows = m.rows || 24;
+          try {
+            const sess = session;
+            sess.pty.resize(cols, rows);
+            setTimeout(() => {
+              try { sess.pty.resize(cols, Math.max(rows - 1, 2)); } catch { /* swallow */ }
+              setTimeout(() => {
+                try { sess.pty.resize(cols, rows); } catch { /* swallow */ }
+              }, 60);
+            }, 80);
+          } catch (e: any) { log(`re-attach resize failed: ${e?.message ?? e}`); }
           break;
         }
 
