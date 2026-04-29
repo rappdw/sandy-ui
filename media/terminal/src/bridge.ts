@@ -200,12 +200,41 @@ type FromHost =
   term.onData((data: string) => post({ type: "input", data }));
 
   let lastCols = 0, lastRows = 0;
+  // Below-this is treated as a layout-transition artifact, not a real user
+  // resize. tmux running under sandy hard-wraps lines at the inner pty
+  // width — if we forward a 30-col resize during a tab hide/show transition,
+  // tmux re-renders the screen narrow and bakes those hard newlines into
+  // xterm's scrollback (no reflow possible after that, even if we resize
+  // back wide). 20 cols is an aggressive minimum that no legitimate VSCode
+  // editor-area pane would shrink below.
+  const MIN_COLS = 20;
+  const MIN_ROWS = 5;
   const sendResize = (): void => {
+    // Suppress while the tab is hidden — VSCode collapses our iframe during
+    // tab transitions and ResizeObserver fires with bogus tiny dims. The
+    // visibilitychange→forceRefit path measures + sends on the way back.
+    if (document.hidden) return;
+
+    // Suppress when the terminal element itself reports near-zero size.
+    // Same defense as document.hidden, but catches cases where the iframe
+    // is technically "visible" mid-transition while still squashed.
+    const el = document.getElementById("terminal");
+    if (el && (el.clientWidth < 50 || el.clientHeight < 30)) return;
+
     try { fit.fit(); }
     catch (e) {
       const err = e as { message?: string };
       log("fit failed", err?.message ?? String(e));
     }
+
+    // Reject implausible fit results (transition artifacts that slipped
+    // through the visibility/element-size guards). The next legitimate
+    // ResizeObserver fire will resend with real dims.
+    if (term.cols < MIN_COLS || term.rows < MIN_ROWS) {
+      log(`sendResize: ignoring squished ${term.cols}x${term.rows}`);
+      return;
+    }
+
     if (term.cols === lastCols && term.rows === lastRows) return;
     lastCols = term.cols; lastRows = term.rows;
     post({ type: "resize", cols: term.cols, rows: term.rows });
@@ -233,7 +262,11 @@ type FromHost =
   // document.visibilitychange as a backup if the host signal misses.
   // Both wait two rAFs so VSCode's layout settles before fit.fit() measures.
   const forceRefit = (reason: string) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => {
+    // Three rAFs (was two): the visibility-restore path needs an extra
+    // tick for VSCode's iframe to finish re-expanding. Two ticks left us
+    // measuring during the layout settle and produced the same tiny dims
+    // we were trying to recover from.
+    requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => {
       const before = `${term.cols}x${term.rows}`;
       // Reset lastCols/lastRows so sendResize doesn't short-circuit if fit
       // happens to land on the same numbers we last reported.
@@ -243,7 +276,7 @@ type FromHost =
       const after = `${term.cols}x${term.rows}`;
       log(`refit (${reason}): ${before} → ${after}`);
       sendResize();
-    }));
+    })));
   };
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") forceRefit("visibilitychange");
