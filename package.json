@@ -78,6 +78,18 @@
       {
         "command": "sandy.tree.deleteSandbox",
         "title": "Delete Sandbox…"
+      },
+      {
+        "command": "sandy.synthkit.md2email",
+        "title": "Synthkit: Convert to Email HTML (clipboard)"
+      },
+      {
+        "command": "sandy.synthkit.md2doc",
+        "title": "Synthkit: Convert to Word (.docx)"
+      },
+      {
+        "command": "sandy.synthkit.md2pdf",
+        "title": "Synthkit: Convert to PDF"
       }
     ],
     "menus": {
@@ -133,6 +145,57 @@
           "command": "sandy.tree.deleteSandbox",
           "when": "view == sandy.projects && viewItem =~ /^sandbox\\./",
           "group": "9_destructive@1"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "sandy.synthkit.md2email",
+          "when": "resourceExtname == .md",
+          "group": "synthkit@1"
+        },
+        {
+          "command": "sandy.synthkit.md2doc",
+          "when": "resourceExtname == .md",
+          "group": "synthkit@2"
+        },
+        {
+          "command": "sandy.synthkit.md2pdf",
+          "when": "resourceExtname == .md",
+          "group": "synthkit@3"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "sandy.synthkit.md2email",
+          "when": "resourceExtname == .md",
+          "group": "synthkit@1"
+        },
+        {
+          "command": "sandy.synthkit.md2doc",
+          "when": "resourceExtname == .md",
+          "group": "synthkit@2"
+        },
+        {
+          "command": "sandy.synthkit.md2pdf",
+          "when": "resourceExtname == .md",
+          "group": "synthkit@3"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "sandy.synthkit.md2email",
+          "when": "resourceExtname == .md",
+          "group": "synthkit@1"
+        },
+        {
+          "command": "sandy.synthkit.md2doc",
+          "when": "resourceExtname == .md",
+          "group": "synthkit@2"
+        },
+        {
+          "command": "sandy.synthkit.md2pdf",
+          "when": "resourceExtname == .md",
+          "group": "synthkit@3"
         }
       ]
     },

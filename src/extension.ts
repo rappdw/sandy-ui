@@ -11,6 +11,7 @@ import { StatePoller } from "./state/poller";
 import { deleteSandboxDir, removeLockForSandbox, lockPathForSandbox } from "./state/deleteSandbox";
 import { invalidateSandyPathCache } from "./state/sandyPath";
 import { PtySupervisor } from "./terminal/supervisor";
+import { runSynthkitCommand } from "./synthkit/commands";
 
 // Module-level so deactivate() can reach the supervisor (deactivate doesn't
 // receive ctx in the same way activate does, and the supervisor needs
@@ -21,6 +22,10 @@ export function activate(ctx: vscode.ExtensionContext) {
   const stateOut = vscode.window.createOutputChannel("Sandy State");
   const poller   = new StatePoller(/* intervalMs */ 5_000, stateOut);
   poller.start();
+
+  // Synthkit (md2email/md2doc/md2pdf right-click integration) gets its own
+  // output channel — its activity is unrelated to sandy state polling.
+  const synthkitOut = vscode.window.createOutputChannel("Synthkit");
 
   supervisor = new PtySupervisor(stateOut);
 
@@ -252,6 +257,14 @@ export function activate(ctx: vscode.ExtensionContext) {
         vscode.window.showErrorMessage(`Sandy: delete failed — ${result.error}`);
       }
     }),
+
+    // Synthkit md2{email,doc,pdf} for .md files. Argument is a Uri when
+    // invoked from explorer/context or editor/title/context; for palette
+    // and editor/context the module falls back to the active editor URI.
+    synthkitOut,
+    vscode.commands.registerCommand("sandy.synthkit.md2email", (arg) => runSynthkitCommand("md2email", arg, synthkitOut)),
+    vscode.commands.registerCommand("sandy.synthkit.md2doc",   (arg) => runSynthkitCommand("md2doc",   arg, synthkitOut)),
+    vscode.commands.registerCommand("sandy.synthkit.md2pdf",   (arg) => runSynthkitCommand("md2pdf",   arg, synthkitOut)),
   );
 }
 
