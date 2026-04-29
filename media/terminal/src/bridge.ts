@@ -131,8 +131,8 @@ type FromHost =
       convertEol:     false,
       scrollback:     10000,
       allowProposedApi: true,
-      fontFamily:     'var(--vscode-editor-font-family, Menlo, Consolas, "Courier New", monospace)',
-      fontSize:       parseInt(cssVar("--vscode-editor-font-size", "13") ?? "13", 10),
+      fontFamily:     'Menlo, Consolas, "Courier New", monospace',
+      fontSize:       13,
       theme:          xtermTheme,
     });
     log("Terminal constructed");
