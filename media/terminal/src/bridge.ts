@@ -104,8 +104,16 @@ type FromHost =
     foreground:                cssVar("--vscode-terminal-foreground",                    "#d4d4d4"),
     cursor:                    cssVar("--vscode-terminalCursor-foreground",              "#d4d4d4"),
     cursorAccent:              cssVar("--vscode-terminalCursor-background",              "#1e1e1e"),
-    selectionBackground:       cssVar("--vscode-terminal-selectionBackground",           "#264f78"),
-    selectionInactiveBackground: cssVar("--vscode-terminal-inactiveSelectionBackground", "#3a3d41"),
+    // Selection colors are hardcoded (not pulled from VSCode CSS vars).
+    // VSCode exposes --vscode-terminal-selectionBackground as rgba with
+    // alpha (e.g. rgba(38,79,120,0.5) on Dark+); xterm.js's theme parser
+    // doesn't reliably apply alpha selection colors and ends up rendering
+    // selection as invisible — which looks identical to "selection broken"
+    // since Cmd+C still works but the user gets no visual feedback. Pin
+    // to a solid navy that's guaranteed visible against any dark bg.
+    selectionBackground:       "#264f78",
+    selectionInactiveBackground: "#3a3d41",
+    selectionForeground:       "#ffffff",
     black:                     "#7a7a7a",
     red:                       cssVar("--vscode-terminal-ansiRed",                       "#cd3131"),
     green:                     cssVar("--vscode-terminal-ansiGreen",                     "#0dbc79"),
