@@ -93,6 +93,12 @@ type FromHost =
   log("css-vars: --vscode-terminal-background =", cssVar("--vscode-terminal-background", "(empty)"));
   log("css-vars: --vscode-terminal-ansiBrightBlack =", cssVar("--vscode-terminal-ansiBrightBlack", "(empty)"));
 
+  // Black (ANSI 0) and brightBlack (ANSI 8) are both forced regardless of
+  // what VSCode's vars say. Claude Code's output uses ANSI 0 for assistant
+  // text; VSCode's --vscode-terminal-ansiBlack is #000000 on Dark+, which
+  // is pure-black on a #1e1e1e background — visually unreadable. We pin
+  // both to greys with guaranteed contrast against any dark background.
+  // Background/foreground/cursor still adapt to the VSCode theme.
   const xtermTheme = {
     background:                cssVar("--vscode-terminal-background",                    "#1e1e1e"),
     foreground:                cssVar("--vscode-terminal-foreground",                    "#d4d4d4"),
@@ -100,7 +106,7 @@ type FromHost =
     cursorAccent:              cssVar("--vscode-terminalCursor-background",              "#1e1e1e"),
     selectionBackground:       cssVar("--vscode-terminal-selectionBackground",           "#264f78"),
     selectionInactiveBackground: cssVar("--vscode-terminal-inactiveSelectionBackground", "#3a3d41"),
-    black:                     cssVar("--vscode-terminal-ansiBlack",                     "#000000"),
+    black:                     "#7a7a7a",
     red:                       cssVar("--vscode-terminal-ansiRed",                       "#cd3131"),
     green:                     cssVar("--vscode-terminal-ansiGreen",                     "#0dbc79"),
     yellow:                    cssVar("--vscode-terminal-ansiYellow",                    "#e5e510"),
@@ -108,10 +114,7 @@ type FromHost =
     magenta:                   cssVar("--vscode-terminal-ansiMagenta",                   "#bc3fbc"),
     cyan:                      cssVar("--vscode-terminal-ansiCyan",                      "#11a8cd"),
     white:                     cssVar("--vscode-terminal-ansiWhite",                     "#e5e5e5"),
-    // brightBlack: bumped to #888 (was #666 in earlier attempt). #666 is
-    // still washed out against #1e1e1e at small font sizes. #888 is the
-    // sweet spot — clearly visible, still distinct from foreground.
-    brightBlack:               cssVar("--vscode-terminal-ansiBrightBlack",               "#888888"),
+    brightBlack:               "#a0a0a0",
     brightRed:                 cssVar("--vscode-terminal-ansiBrightRed",                 "#f14c4c"),
     brightGreen:               cssVar("--vscode-terminal-ansiBrightGreen",               "#23d18b"),
     brightYellow:              cssVar("--vscode-terminal-ansiBrightYellow",              "#f5f543"),
