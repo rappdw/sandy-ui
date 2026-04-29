@@ -145,6 +145,16 @@ type FromHost =
       fontFamily:     'Menlo, Consolas, "Courier New", monospace',
       fontSize:       13,
       theme:          xtermTheme,
+      // Sandy runs tmux which enables mouse mode by default — that means
+      // drag events go to tmux (for pane resize / copy-mode entry) and
+      // xterm.js's native selection is suppressed. macOptionClickForcesSelection
+      // lets the user hold ⌥ Option and drag to select text normally,
+      // bypassing tmux mouse mode for that drag. Without this, Option-drag
+      // does rectangular selection (crosshair cursor) which most users
+      // don't want; this swaps it for normal-drag-to-select. Standard
+      // convention on Mac terminals (iTerm2, Terminal.app).
+      macOptionClickForcesSelection: true,
+      rightClickSelectsWord: true,
     });
     log("Terminal constructed");
     fit   = new FitAddon.FitAddon();
