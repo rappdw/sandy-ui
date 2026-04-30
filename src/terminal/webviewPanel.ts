@@ -234,7 +234,33 @@ export async function openTerminalPanel(
         break;
       }
       case "input":  session?.pty.write(m.data); break;
-      case "resize": log(`resize ${m.cols}x${m.rows}`); session?.pty.resize(m.cols, m.rows); break;
+      case "resize": {
+        // Defense in depth against tab-switch squish: VSCode's iframe layout
+        // collapses briefly during tab transitions, ResizeObserver fires on
+        // the webview side with tiny dims, those get baked into tmux as
+        // hard line wraps in scrollback (no reflow possible after the fact).
+        // The webview side has its own guards (document.hidden, MIN_COLS,
+        // element.clientWidth) but document.hidden races with ResizeObserver
+        // in some VSCode versions. panel.visible is the authoritative
+        // host-side signal — drop any resize while we know the tab isn't
+        // visible. We schedule a refit on visible-restore separately
+        // (panel.onDidChangeViewState below), so this is just suppression.
+        if (!panel.visible) {
+          log(`resize ${m.cols}x${m.rows} suppressed (panel not visible)`);
+          break;
+        }
+        // Floor: anything below 20 cols is implausible for a real editor
+        // pane and almost certainly a transition artifact that slipped past
+        // the visibility check. Same threshold as the webview's MIN_COLS.
+        if (m.cols < 20 || m.rows < 5) {
+          log(`resize ${m.cols}x${m.rows} suppressed (below sanity floor)`);
+          panel.webview.postMessage(<FromHost>{ type: "refit" });
+          break;
+        }
+        log(`resize ${m.cols}x${m.rows}`);
+        session?.pty.resize(m.cols, m.rows);
+        break;
+      }
       case "osc":    handleOsc(panel, m.event); break;
       case "log":    log(`[webview ${m.level}] ${m.msg}`); break;
     }
