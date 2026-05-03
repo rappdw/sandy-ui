@@ -1,5 +1,6 @@
 import * as nodePty from "node-pty";
 import * as os from "os";
+import * as path from "path";
 
 export interface PtyHandle {
   write(data: string): void;
@@ -24,6 +25,35 @@ export interface SpawnOpts {
 const ENV_WHITELIST = ["HOME", "USER", "PATH", "LANG", "TERM", "SHELL", "SSH_AUTH_SOCK"];
 const ENV_PREFIX_WHITELIST = ["LC_", "SANDY_"];
 
+// Common install dirs to append to the spawned process's PATH. VSCode launched
+// from the Dock on macOS inherits launchd's narrow PATH (/usr/bin:/bin:
+// /usr/sbin:/sbin) — no Homebrew, no ~/.local/bin. Sandy itself uses
+// resolveSandyBinary to dodge this for finding `sandy`, but sandy then tries
+// to invoke OTHER tools (socat for SSH agent mode, python3 for the relay,
+// gh for token auth, docker, etc.) via plain PATH lookup. Without this
+// augmentation those lookups fail with messages like "SANDY_SSH=agent
+// requires socat on macOS" even when socat is installed.
+//
+// Appended (not prepended) so user-controlled PATH entries still win.
+const PATH_AUGMENTATIONS = [
+  "/opt/homebrew/bin",                          // Homebrew on Apple Silicon
+  "/usr/local/bin",                             // Homebrew on Intel + most Linux
+  path.join(os.homedir(), ".local/bin"),        // user-local install
+  path.join(os.homedir(), "bin"),               // ~/bin
+];
+
+export function augmentPath(originalPath: string | undefined): string {
+  const segments = (originalPath ?? "").split(path.delimiter).filter(Boolean);
+  const seen = new Set(segments);
+  for (const dir of PATH_AUGMENTATIONS) {
+    if (!seen.has(dir)) {
+      segments.push(dir);
+      seen.add(dir);
+    }
+  }
+  return segments.join(path.delimiter);
+}
+
 export function buildCleanEnv(extra: Record<string, string> = {}): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
@@ -31,6 +61,10 @@ export function buildCleanEnv(extra: Record<string, string> = {}): Record<string
     if (ENV_WHITELIST.includes(k))                                   out[k] = v;
     else if (ENV_PREFIX_WHITELIST.some(p => k.startsWith(p)))        out[k] = v;
   }
+  // Augment PATH so child processes (sandy itself, plus any binary sandy
+  // invokes — socat, python3, gh, docker, etc.) can resolve them even when
+  // VSCode was launched from the Dock with macOS's narrow launchd PATH.
+  out.PATH = augmentPath(out.PATH);
   // TERM must report something xterm.js can speak; default if shell didn't set one.
   if (!out.TERM) out.TERM = "xterm-256color";
   Object.assign(out, extra);
