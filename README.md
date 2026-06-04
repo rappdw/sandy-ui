@@ -2,7 +2,7 @@
 
 VSCode extension that wraps the [sandy](https://github.com/rappdw/sandy) CLI — runs sandy as a webview-hosted terminal in the editor area, with schema-driven settings and pre-flight approval modals.
 
-> **Status**: 0.4.0, dogfooding for the author. Not yet on Marketplace / OpenVSX. Public distribution is gated on macOS TCC mitigation and node-pty packaging — see [SPEC_SANDY_UI.md](SPEC_SANDY_UI.md) and [docs/SPIKE_RESULTS.md](docs/SPIKE_RESULTS.md) for the production roadmap.
+> **Status**: 0.4.1, dogfooding for the author. Not yet on Marketplace / OpenVSX. Public distribution is gated on macOS TCC mitigation and node-pty packaging — see [SPEC_SANDY_UI.md](SPEC_SANDY_UI.md) and [docs/SPIKE_RESULTS.md](docs/SPIKE_RESULTS.md) for the production roadmap.
 
 ## What it gives you
 
@@ -26,7 +26,7 @@ VSCode extension that wraps the [sandy](https://github.com/rappdw/sandy) CLI —
 <!-- VERSION-PIN: update this URL whenever package.json version is bumped (see CLAUDE.md > "On every release") -->
 
 ```bash
-curl -L https://github.com/rappdw/sandy-ui/releases/download/v0.4.0/sandy-ui-0.4.0.vsix -o /tmp/sandy.vsix \
+curl -L https://github.com/rappdw/sandy-ui/releases/download/v0.4.1/sandy-ui-0.4.1.vsix -o /tmp/sandy.vsix \
   && code --install-extension /tmp/sandy.vsix
 # Then: Cmd+Shift+P → "Developer: Reload Window" in any open VSCode window
 ```

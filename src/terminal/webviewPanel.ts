@@ -21,7 +21,8 @@ type FromHost =
   | { type: "init"; cols: number; rows: number }
   | { type: "data"; data: string }
   | { type: "exit"; code: number }
-  | { type: "refit" };
+  | { type: "refit" }
+  | { type: "scrollSensitivity"; value: number };
 
 export async function openTerminalPanel(
   ctx: vscode.ExtensionContext,
@@ -106,12 +107,26 @@ export async function openTerminalPanel(
   // once we know the webview's measured cols/rows.
   let session: Session | undefined;
 
+  // Push the wheel-scroll sensitivity to the webview, now and whenever the
+  // setting changes — so users can tune scroll speed live without reloading.
+  const pushScrollSensitivity = () => {
+    const value = vscode.workspace
+      .getConfiguration("sandy.terminal")
+      .get<number>("scrollSensitivity", 1);
+    panel.webview.postMessage(<FromHost>{ type: "scrollSensitivity", value });
+  };
+  pushScrollSensitivity();
+  const cfgSub = vscode.workspace.onDidChangeConfiguration((e) => {
+    if (e.affectsConfiguration("sandy.terminal.scrollSensitivity")) pushScrollSensitivity();
+  });
+
   log(`openTerminalPanel: workspace=${ws}${isReattach ? " (re-attach)" : ""}`);
 
   const sub = panel.webview.onDidReceiveMessage(async (m: ToHost) => {
     switch (m.type) {
       case "ready": {
         log(`webview ready (initial size ${m.cols}x${m.rows})`);
+        pushScrollSensitivity(); // guaranteed-delivered now the listener is up
 
         if (isReattach && existingSession) {
           // Re-attach: skip lock sweep, skip spawn. Bind the panel to the
@@ -281,6 +296,7 @@ export async function openTerminalPanel(
   // still attached when the panel disposes.
   panel.onDidDispose(async () => {
     sub.dispose();
+    cfgSub.dispose();
     if (!session) return;
     // If supervisor's session.panel === undefined OR points elsewhere,
     // this dispose is from a detach (already handled) or from a stale

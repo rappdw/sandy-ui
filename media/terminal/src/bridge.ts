@@ -27,7 +27,8 @@ type ToHost =
 type FromHost =
   | { type: "data"; data: string }
   | { type: "exit"; code: number }
-  | { type: "refit" };
+  | { type: "refit" }
+  | { type: "scrollSensitivity"; value: number };
 
 // ---------------------------------------------------------------------------
 
@@ -49,6 +50,11 @@ type FromHost =
   catch (e) { showFatal("acquireVsCodeApi failed: " + String(e)); return; }
 
   const post = (m: ToHost) => vscode.postMessage(m);
+
+  // User-facing wheel-speed multiplier (sandy.terminal.scrollSensitivity).
+  // 1 = the tuned defaults below; >1 scrolls faster, <1 finer. The host posts
+  // the current value on launch and again whenever the setting changes.
+  let scrollSensitivity = 1;
   const log = (...args: unknown[]) => {
     try { console.log("[bridge]", ...args); } catch { /* swallow */ }
     try { post({ type: "log", level: "info", msg: args.map(String).join(" ") }); } catch { /* swallow */ }
@@ -272,6 +278,13 @@ type FromHost =
     const POST_MOUSEUP_WHEEL_GUARD_MS = 200;
     document.addEventListener("mouseup", () => { lastMouseUpAt = performance.now(); }, true);
 
+    // Pixel-mode accumulator. Trackpads (and smooth-scroll mice) fire a stream
+    // of small deltas; flooring each to a whole line would overshoot and ruin
+    // fine control. Instead we bank pixels here and only emit lines once the
+    // running total crosses a line height — so a gentle nudge scrolls a little,
+    // not a full line per event.
+    let wheelAccumPx = 0;
+
     // Translate the wheel into SGR mouse events for the app. When nothing has
     // asked for mouse (bare prompt), return true so xterm scrolls its own
     // scrollback normally.
@@ -288,12 +301,42 @@ type FromHost =
       if (cellW <= 0 || cellH <= 0) return true;
       const col = Math.min(term.cols, Math.max(1, Math.floor((ev.clientX - rect.left) / cellW) + 1));
       const row = Math.min(term.rows, Math.max(1, Math.floor((ev.clientY - rect.top) / cellH) + 1));
-      const btn = ev.deltaY < 0 ? 64 : 65; // 64 = wheel up, 65 = wheel down
-      // ~3 lines per notch like a native terminal; clamp so trackpad inertia
-      // (pixel-mode deltas) doesn't flood the PTY.
-      const lines = ev.deltaMode === 0
-        ? Math.min(5, Math.max(1, Math.round(Math.abs(ev.deltaY) / 40)))
-        : Math.min(5, Math.max(1, Math.round(Math.abs(ev.deltaY))));
+      // Two device profiles share the wheel, and they want opposite things:
+      //   - Trackpads fire a stream of small pixel deltas → accumulate them so
+      //     sub-line movements bank up (fine control, no per-event overshoot).
+      //   - A mouse wheel fires a few big notches → emit lines immediately so
+      //     it feels snappy, not laggy.
+      // Branch on delta size. NOTCH_PX is the threshold between "smooth dribble"
+      // and "discrete notch". COARSE divisor sets lines-per-notch (snappy);
+      // FINE divisor sets the trackpad accumulation rate (slow = fine).
+      // scrollSensitivity scales speed by shrinking the px-per-line divisors
+      // (higher sensitivity → fewer px per line → faster) and raising the cap
+      // so a fast flick isn't bottlenecked. Clamp to a sane range.
+      const sens = Math.min(10, Math.max(0.1, scrollSensitivity));
+      const FINE_PIXELS_PER_LINE = 70 / sens;
+      const COARSE_PIXELS_PER_LINE = 25 / sens;
+      const NOTCH_PX = 50;
+      const MAX_LINES_PER_EVENT = Math.ceil(5 * sens);
+
+      let lines: number;
+      let btn: number; // 64 = wheel up, 65 = wheel down
+      if (ev.deltaMode === 0 && Math.abs(ev.deltaY) < NOTCH_PX) {
+        // Trackpad: accumulate sub-line deltas.
+        // Reset the bank on a direction change so a reversal responds instantly.
+        if ((wheelAccumPx > 0) !== (ev.deltaY > 0)) wheelAccumPx = 0;
+        wheelAccumPx += ev.deltaY;
+        const whole = Math.trunc(wheelAccumPx / FINE_PIXELS_PER_LINE);
+        if (whole === 0) return false; // not enough banked yet — swallow, don't scroll
+        wheelAccumPx -= whole * FINE_PIXELS_PER_LINE;
+        lines = Math.min(MAX_LINES_PER_EVENT, Math.abs(whole));
+        btn = whole < 0 ? 64 : 65;
+      } else {
+        // Discrete wheel notch (large pixel delta) or line/page mode: emit now.
+        wheelAccumPx = 0; // drop any stale trackpad bank
+        const px = ev.deltaMode === 0 ? Math.abs(ev.deltaY) : Math.abs(ev.deltaY) * COARSE_PIXELS_PER_LINE;
+        lines = Math.min(MAX_LINES_PER_EVENT, Math.max(1, Math.round(px / COARSE_PIXELS_PER_LINE)));
+        btn = ev.deltaY < 0 ? 64 : 65;
+      }
       let seq = "";
       for (let i = 0; i < lines; i++) seq += `\x1b[<${btn};${col};${row}M`;
       post({ type: "input", data: seq });
@@ -408,6 +451,11 @@ type FromHost =
       term.write(`\r\n\x1b[2m[process exited ${m.code}]\x1b[0m\r\n`);
     } else if (m.type === "refit") {
       forceRefit("host");
+    } else if (m.type === "scrollSensitivity") {
+      if (typeof m.value === "number" && isFinite(m.value)) {
+        scrollSensitivity = m.value;
+        log("scrollSensitivity =", scrollSensitivity);
+      }
     }
   });
 

@@ -2,7 +2,7 @@
   "name": "sandy-ui",
   "displayName": "Sandy UI",
   "description": "VSCode extension wrapping the sandy CLI — webview-hosted terminal, schema-driven settings, pre-flight approvals.",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "publisher": "rappdw",
   "private": true,
   "repository": {
@@ -243,6 +243,13 @@
           "type": "boolean",
           "default": false,
           "description": "On Sandy: Launch, close the primary side bar (Explorer / Search / SCM). Off by default since the file tree is usually wanted alongside sandy."
+        },
+        "sandy.terminal.scrollSensitivity": {
+          "type": "number",
+          "default": 2,
+          "minimum": 0.1,
+          "maximum": 10,
+          "description": "Mouse-wheel / trackpad scroll speed in the Sandy terminal. Higher scrolls faster, lower gives finer control. Applies live — no reload needed."
         }
       }
     }
