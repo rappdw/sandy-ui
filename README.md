@@ -26,7 +26,7 @@ VSCode extension that wraps the [sandy](https://github.com/rappdw/sandy) CLI —
 <!-- VERSION-PIN: update this URL whenever package.json version is bumped (see CLAUDE.md > "On every release") -->
 
 ```bash
-curl -L https://github.com/rappdw/sandy-ui/releases/download/v0.3.0/sandy-ui-0.3.0.vsix -o /tmp/sandy.vsix \
+curl -L https://github.com/rappdw/sandy-ui/releases/download/v0.4.0/sandy-ui-0.4.0.vsix -o /tmp/sandy.vsix \
   && code --install-extension /tmp/sandy.vsix
 # Then: Cmd+Shift+P → "Developer: Reload Window" in any open VSCode window
 ```

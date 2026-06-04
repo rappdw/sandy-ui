@@ -145,14 +145,11 @@ type FromHost =
       fontFamily:     'Menlo, Consolas, "Courier New", monospace',
       fontSize:       13,
       theme:          xtermTheme,
-      // Sandy runs tmux which enables mouse mode by default — that means
-      // drag events go to tmux (for pane resize / copy-mode entry) and
-      // xterm.js's native selection is suppressed. macOptionClickForcesSelection
-      // lets the user hold ⌥ Option and drag to select text normally,
-      // bypassing tmux mouse mode for that drag. Without this, Option-drag
-      // does rectangular selection (crosshair cursor) which most users
-      // don't want; this swaps it for normal-drag-to-select. Standard
-      // convention on Mac terminals (iTerm2, Terminal.app).
+      // We intercept tmux's mouse-tracking enables below (see "split mouse"
+      // section) so xterm never forwards click/drag — plain drag selects
+      // natively, no modifier needed. macOptionClickForcesSelection stays on
+      // purely so ⌥-drag does NOT fall into xterm's column-select (crosshair)
+      // mode; with mouse tracking suppressed, ⌥ is otherwise a no-op.
       macOptionClickForcesSelection: true,
       rightClickSelectsWord: true,
     });
@@ -212,6 +209,105 @@ type FromHost =
   } catch (e) {
     // Don't fail hard — OSC handlers are not required for basic terminal output.
     fail("OSC handler registration (non-fatal)", e);
+  }
+
+  // ---- Split mouse: native selection + wheel-to-tmux + clean fullscreen -----
+  // tmux's "mouse on" is one terminal-level switch that bundles two things:
+  // mouse TRACKING (click/drag → forwarded to the app, which suppresses
+  // xterm's native selection) and the WHEEL (scroll → forwarded to the app).
+  // Leaving it on means you must hold ⌥ to select; turning it off kills wheel
+  // scroll inside tmux. We split the switch so you get all three at once:
+  // native drag-to-select with no modifier, wheel still scrolls tmux, and
+  // fullscreen TUIs (claude, vim) still render/restore cleanly.
+  //
+  //   (1) Swallow the mouse-TRACKING DECSET/DECRST modes (9/1000/1001/1002/
+  //       1003) so xterm never enters mouse mode and never forwards click/drag
+  //       → selection is always native. Everything else — crucially alt-screen
+  //       (1049), bracketed paste (2004), app cursor keys — passes straight
+  //       through, so fullscreen rendering is untouched.
+  //   (2) Re-inject ONLY the wheel as SGR mouse events directly to the PTY, so
+  //       tmux (whose own `mouse on` we never disabled — it just never saw us
+  //       hide the enable from xterm) still scrolls on wheel.
+  //
+  // Cost: clicking INSIDE a TUI app no longer reaches it — only wheel and the
+  // keyboard do. Selection-over-app-click is the deliberate trade for sandy.
+  try {
+    if (!term.parser) throw new Error("term.parser undefined");
+
+    // DECSET/DECRST private modes that turn on mouse *tracking* (not encoding
+    // modes like 1006 SGR, which are harmless to leave). Swallowing these is
+    // what keeps drag native.
+    const MOUSE_TRACKING_MODES = new Set([9, 1000, 1001, 1002, 1003]);
+
+    // True while the inner app has asked for mouse tracking (i.e. we swallowed
+    // an enable). Used to decide whether the wheel should be re-injected to the
+    // app or left to xterm's own scrollback handling at a bare prompt.
+    let appWantsMouse = false;
+
+    // params entries can be number | number[] (sub-params); compare on heads.
+    const allMouseTracking = (params: (number | number[])[]): boolean => {
+      const codes = params.map((p) => (Array.isArray(p) ? p[0] : p));
+      return codes.length > 0 && codes.every((c) => MOUSE_TRACKING_MODES.has(c));
+    };
+
+    // Most-recently-added CSI handler runs FIRST; returning true consumes the
+    // sequence so xterm's built-in DECSET/DECRST never runs (mouse mode stays
+    // off). Only consume when the sequence is purely mouse-tracking modes — a
+    // mixed sequence (rare) passes through untouched so we never eat 1049 etc.
+    term.parser.registerCsiHandler({ prefix: "?", final: "h" }, (params) => {
+      if (allMouseTracking(params)) { appWantsMouse = true; return true; }
+      return false;
+    });
+    term.parser.registerCsiHandler({ prefix: "?", final: "l" }, (params) => {
+      if (allMouseTracking(params)) { appWantsMouse = false; return true; }
+      return false;
+    });
+
+    // Trackpad inertia spills a phantom wheel event right at the end of a
+    // selection drag (the tail of the two-finger gesture). Without this guard
+    // that stray wheel would run the scroll/clear path below and wipe the
+    // selection the user just released — intermittently, depending on momentum.
+    // Record each mouseup and ignore wheel for a brief window afterward.
+    let lastMouseUpAt = -Infinity;
+    const POST_MOUSEUP_WHEEL_GUARD_MS = 200;
+    document.addEventListener("mouseup", () => { lastMouseUpAt = performance.now(); }, true);
+
+    // Translate the wheel into SGR mouse events for the app. When nothing has
+    // asked for mouse (bare prompt), return true so xterm scrolls its own
+    // scrollback normally.
+    term.attachCustomWheelEventHandler((ev: WheelEvent): boolean => {
+      if (!appWantsMouse) return true;
+      // Within the post-selection guard window: swallow without injecting or
+      // clearing, so releasing a selection never scrolls or drops it.
+      if (performance.now() - lastMouseUpAt < POST_MOUSEUP_WHEEL_GUARD_MS) return false;
+      const el = document.getElementById("terminal");
+      if (!el || term.cols < 1 || term.rows < 1) return true;
+      const rect = el.getBoundingClientRect();
+      const cellW = rect.width / term.cols;
+      const cellH = rect.height / term.rows;
+      if (cellW <= 0 || cellH <= 0) return true;
+      const col = Math.min(term.cols, Math.max(1, Math.floor((ev.clientX - rect.left) / cellW) + 1));
+      const row = Math.min(term.rows, Math.max(1, Math.floor((ev.clientY - rect.top) / cellH) + 1));
+      const btn = ev.deltaY < 0 ? 64 : 65; // 64 = wheel up, 65 = wheel down
+      // ~3 lines per notch like a native terminal; clamp so trackpad inertia
+      // (pixel-mode deltas) doesn't flood the PTY.
+      const lines = ev.deltaMode === 0
+        ? Math.min(5, Math.max(1, Math.round(Math.abs(ev.deltaY) / 40)))
+        : Math.min(5, Math.max(1, Math.round(Math.abs(ev.deltaY))));
+      let seq = "";
+      for (let i = 0; i < lines; i++) seq += `\x1b[<${btn};${col};${row}M`;
+      post({ type: "input", data: seq });
+      // tmux repaints the screen in place in response — xterm sees new chars in
+      // the same cells, not a scroll, so a live selection would stay painted
+      // over now-different text. Clear it, matching native terminal behavior
+      // where scrolling drops the selection.
+      if (term.hasSelection()) term.clearSelection();
+      return false; // handled — suppress xterm's own (alt-screen) wheel behavior
+    });
+    log("split-mouse handlers registered");
+  } catch (e) {
+    // Non-fatal — basic terminal output and keyboard still work without this.
+    fail("split-mouse setup (non-fatal)", e);
   }
 
   // ---- Wire input + resize --------------------------------------------------
