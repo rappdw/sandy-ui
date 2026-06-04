@@ -60,7 +60,11 @@ npx electron-rebuild -f -w node-pty
 
 ## Configuration
 
+- `sandy.binaryPath` — absolute path to the sandy binary (default: empty = auto-detect via PATH, then `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, `~/bin`). Set this when VSCode launched-from-Dock can't find sandy on its narrower PATH.
 - `sandy.launchCommand` — override the auto-detected launch command (default: `sandy` → `tmux` → `$SHELL` in PATH order, picking the first executable). Useful for testing against tmux or a plain shell instead of sandy.
+- `sandy.launch.closeBottomPanel` — on **Sandy: Launch**, close the bottom panel (Problems / Output / Terminal / Debug Console) to maximize editor space (default: `true`).
+- `sandy.launch.closeAuxiliaryBar` — on **Sandy: Launch**, close the auxiliary side bar (where the Chat / Copilot panel typically lives) to maximize editor space (default: `true`).
+- `sandy.launch.closeSidebar` — on **Sandy: Launch**, close the primary side bar (Explorer / Search / SCM). Off by default since the file tree is usually wanted alongside sandy (default: `false`).
 - `sandy.terminal.scrollSensitivity` — mouse-wheel / trackpad scroll speed in the Sandy terminal (default `2`, range `0.1`–`10`). Higher scrolls faster, lower gives finer control. Applies live — no reload needed.
 
 ## Architecture
