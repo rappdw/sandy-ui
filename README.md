@@ -61,6 +61,7 @@ npx electron-rebuild -f -w node-pty
 ## Configuration
 
 - `sandy.launchCommand` — override the auto-detected launch command (default: `sandy` → `tmux` → `$SHELL` in PATH order, picking the first executable). Useful for testing against tmux or a plain shell instead of sandy.
+- `sandy.terminal.scrollSensitivity` — mouse-wheel / trackpad scroll speed in the Sandy terminal (default `2`, range `0.1`–`10`). Higher scrolls faster, lower gives finer control. Applies live — no reload needed.
 
 ## Architecture
 
