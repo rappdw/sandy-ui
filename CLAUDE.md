@@ -27,7 +27,10 @@ F5 in VSCode opens the Extension Development Host — fastest dev loop. For acti
 
 ## On every release
 
-When `package.json` `version` is bumped and `npm run release` is run, **also update the `curl` command in README.md's "Install (latest release)" section** to point at the new tag. The version is pinned in two places (package.json + README install one-liner) and they must stay synchronized.
+When `package.json` `version` is bumped and `npm run release` is run:
+
+1. **Update the `curl` command in README.md's "Install (latest release)" section** to point at the new tag. The version is pinned in two places (package.json + README install one-liner) and they must stay synchronized.
+2. **Write `docs/releases/v<version>.md`** — the curated release body. `scripts/release.sh` uses it as the GitHub release notes via `--notes-file` when present; without it the release falls back to `gh --generate-notes` (just the commit changelog, no highlights). Match the existing files' shape: a one-line headline, a `## What's new` section grouped by area, a `## Status` milestone table, and a `## Install` block with the new tag. Forgetting this file is why a release ends up with empty notes — create it **before** running `npm run release`.
 
 ## Tests
 
