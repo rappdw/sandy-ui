@@ -37,7 +37,7 @@ export async function openApprovalWebview(
     panel.webview.asWebviewUri(vscode.Uri.joinPath(ctx.extensionUri, "media", "approval", sub));
   panel.webview.html = renderHtml({
     cspSource: panel.webview.cspSource,
-    js:        mediaUri("approval.js"),
+    js:        mediaUri("dist/approval.js"),  // esbuild output from src/approval.ts
     css:       mediaUri("approval.css"),
   });
 

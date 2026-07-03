@@ -3,7 +3,7 @@
 // Outputs:
 //   media/terminal/dist/bridge.js   ← from media/terminal/src/bridge.ts
 //   media/settings/dist/settings.js ← from media/settings/src/settings.ts
-//   media/approval/dist/approval.js ← (not yet migrated; passthrough TODO)
+//   media/approval/dist/approval.js ← from media/approval/src/approval.ts
 //
 // Globals in the webview runtime (provided by <script> tags from
 // media/terminal/vendor/) are NOT bundled — declared as externals so esbuild
@@ -20,6 +20,10 @@ const targets = [
   {
     entry: "media/settings/src/settings.ts",
     out:   "media/settings/dist/settings.js",
+  },
+  {
+    entry: "media/approval/src/approval.ts",
+    out:   "media/approval/dist/approval.js",
   },
 ];
 
