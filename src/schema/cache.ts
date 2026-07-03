@@ -32,8 +32,12 @@ export interface SchemaResolution {
 
 const CACHE_FILE_NAME = "schema-cache.json";
 
-export function getCachedSchema(globalStorageDir: string, fallbackMock: Schema): SchemaResolution {
-  const sandyVersion = trySandyVersion();
+// Async throughout: the previous execFileSync version blocked the extension
+// host event loop for up to ~15s (5s --version + 10s --print-schema
+// timeouts) on every settings-panel open — 5s even on cache hits when sandy
+// or docker wedged (review finding P1).
+export async function getCachedSchema(globalStorageDir: string, fallbackMock: Schema): Promise<SchemaResolution> {
+  const sandyVersion = await trySandyVersion();
   if (!sandyVersion) {
     return { schema: fallbackMock, source: "fallback", error: "sandy not on PATH" };
   }
@@ -48,14 +52,14 @@ export function getCachedSchema(globalStorageDir: string, fallbackMock: Schema):
   return refreshSchema(globalStorageDir, fallbackMock, sandyVersion);
 }
 
-export function refreshSchema(globalStorageDir: string, fallbackMock: Schema, sandyVersion?: string): SchemaResolution {
-  const version = sandyVersion ?? trySandyVersion();
+export async function refreshSchema(globalStorageDir: string, fallbackMock: Schema, sandyVersion?: string): Promise<SchemaResolution> {
+  const version = sandyVersion ?? await trySandyVersion();
   if (!version) {
     return { schema: fallbackMock, source: "fallback", error: "sandy not on PATH" };
   }
   let raw: SandySchema;
   try {
-    raw = invokeSandyPrintSchema();
+    raw = await invokeSandyPrintSchema();
   } catch (e: any) {
     return {
       schema: fallbackMock,
@@ -94,15 +98,21 @@ export function refreshSchema(globalStorageDir: string, fallbackMock: Schema, sa
 
 // --- internals -------------------------------------------------------------
 
-function trySandyVersion(): string | undefined {
+function execFileText(cmd: string, args: string[], timeoutMs: number): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    cp.execFile(cmd, args, {
+      encoding: "utf8",
+      timeout: timeoutMs,
+      maxBuffer: 10 * 1024 * 1024,
+    }, (err, stdout) => (err ? reject(err) : resolve(stdout)));
+  });
+}
+
+async function trySandyVersion(): Promise<string | undefined> {
   const sandyBin = resolveSandyBinary();
   if (!sandyBin) return undefined;
   try {
-    const out = cp.execFileSync(sandyBin, ["--version"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 5_000,
-    }).trim();
+    const out = (await execFileText(sandyBin, ["--version"], 5_000)).trim();
     // sandy --version prints something like "sandy 0.12.0" or just "0.12.0";
     // grab the first dotted-numeric token.
     const m = out.match(/\b\d+\.\d+\.\d+(?:[\w.-]*)?\b/);
@@ -110,15 +120,10 @@ function trySandyVersion(): string | undefined {
   } catch { return undefined; }
 }
 
-function invokeSandyPrintSchema(): SandySchema {
+async function invokeSandyPrintSchema(): Promise<SandySchema> {
   const sandyBin = resolveSandyBinary();
   if (!sandyBin) throw new Error("sandy not found");
-  const out = cp.execFileSync(sandyBin, ["--print-schema"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: 10_000,
-    maxBuffer: 10 * 1024 * 1024,
-  });
+  const out = await execFileText(sandyBin, ["--print-schema"], 10_000);
   return JSON.parse(out) as SandySchema;
 }
 

@@ -37,16 +37,20 @@ export function openSettingsPanel(ctx: vscode.ExtensionContext) {
     css:       mediaUri("settings.css"),
   });
 
-  const resolution = getCachedSchema(ctx.globalStorageUri.fsPath, schemaMock as Schema);
-  const schema = resolution.schema;
+  // Kicked off immediately, awaited in the message handlers — never blocks
+  // the extension host (getCachedSchema shells out to sandy; the sync
+  // version froze the host up to ~15s when sandy/docker wedged).
+  const schemaPromise = getCachedSchema(ctx.globalStorageUri.fsPath, schemaMock as Schema);
+  void schemaPromise.then((resolution) => {
+    log(`schema source=${resolution.source}` + (resolution.sandy_version ? ` (sandy ${resolution.sandy_version})` : ""));
+    if (resolution.error) log(`schema fallback reason: ${resolution.error}`);
+  });
   // Auto-pop the output channel only if the user keeps the bottom panel open
   // — same rationale as openTerminalPanel. Don't fight the maximize-editor-
   // space setting.
   if (!vscode.workspace.getConfiguration("sandy.launch").get<boolean>("closeBottomPanel", true)) {
     out.show(true);
   }
-  log(`schema source=${resolution.source}` + (resolution.sandy_version ? ` (sandy ${resolution.sandy_version})` : ""));
-  if (resolution.error) log(`schema fallback reason: ${resolution.error}`);
 
   const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   const wsConfigPath  = ws ? workspaceConfigPath(ws)  : undefined;
@@ -59,6 +63,7 @@ export function openSettingsPanel(ctx: vscode.ExtensionContext) {
         break;
       }
       case "ready": {
+        const schema = (await schemaPromise).schema;
         const homeConfig    = readKv(HOME_CONFIG);
         const homeSecrets   = readKv(HOME_SECRETS);
         const wsConfig      = wsConfigPath  ? readKv(wsConfigPath)  : {};
@@ -106,6 +111,7 @@ export function openSettingsPanel(ctx: vscode.ExtensionContext) {
           if (scope === "workspace" && !ws) {
             throw new Error("No workspace folder open — cannot save to workspace scope.");
           }
+          const schema = (await schemaPromise).schema;
           saveScope(scope, ws, schema, incoming);
           const configTarget  = scope === "home" ? HOME_CONFIG  : wsConfigPath!;
           const secretsTarget = secretsPathFor(scope, ws);
