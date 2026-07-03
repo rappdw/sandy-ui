@@ -2,11 +2,18 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 
-// Sandy's per-workspace lock format observed in the wild:
-//   ~/.sandy/sandboxes/.<basename>-<8hex>.lock
-// where <8hex> is a hash of the full workspace path. Lock can be a file
+// Sandy's per-workspace lock format (verified against sandy's source):
+//   ~/.sandy/sandboxes/.<base>-<8hex>.lock
+// where <base> is the workspace basename sanitized exactly like sandy's
+// DIR_BASE (`tr -cd 'a-zA-Z0-9._-'`, empty → "project") and <8hex> is the
+// first 8 lowercase hex chars of sha256(workspace path). Lock can be a file
 // (containing the PID on the first line) or a directory (containing files
 // like "pid" with the PID).
+//
+// Matching must be EXACT on that shape — a loose `.<basename>-` prefix match
+// would let workspace "foo" claim "foo-2"'s locks (`.foo-2-<hash>.lock`),
+// and the orphan-resolution flow would then offer to SIGTERM another
+// project's live sandy.
 //
 // On VSCode reload / crash sandy's cleanup trap doesn't always run, leaving
 // the lock behind even though the PID is dead. This module sweeps for those.
@@ -29,11 +36,10 @@ export function sweepStaleLocksIn(sandboxDir: string, workspaceFsPath: string): 
   const result: LockSweepResult = { cleaned: [], alive: [], unknown: [] };
   if (!fs.existsSync(sandboxDir)) return result;
 
-  const baseName = path.basename(workspaceFsPath);
-  const prefix = `.${baseName}-`;
+  const lockRe = lockNamePattern(workspaceFsPath);
 
   for (const entry of fs.readdirSync(sandboxDir)) {
-    if (!entry.endsWith(".lock") || !entry.startsWith(prefix)) continue;
+    if (!lockRe.test(entry)) continue;
     const lockPath = path.join(sandboxDir, entry);
     const pid = readLockPid(lockPath);
     if (pid == null) {
@@ -52,6 +58,15 @@ export function sweepStaleLocksIn(sandboxDir: string, workspaceFsPath: string): 
     }
   }
   return result;
+}
+
+// Exact lock-name matcher for a workspace. Mirrors sandy's naming:
+// basename sanitized with tr -cd 'a-zA-Z0-9._-' ("project" when empty),
+// then "-" + exactly 8 lowercase-hex hash chars + ".lock", dot-prefixed.
+export function lockNamePattern(workspaceFsPath: string): RegExp {
+  const sanitized = path.basename(workspaceFsPath).replace(/[^a-zA-Z0-9._-]/g, "") || "project";
+  const escaped = sanitized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^\\.${escaped}-[0-9a-f]{8}\\.lock$`);
 }
 
 export function readLockPid(lockPath: string): number | null {
@@ -84,5 +99,10 @@ function parseFirstInt(text: string): number | null {
 
 export function isPidAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; }    // signal 0 = liveness probe
-  catch { return false; }
+  catch (e) {
+    // EPERM = the process exists but belongs to another user — that's ALIVE.
+    // Treating it as dead would let the sweep remove a live lock. Only ESRCH
+    // (and anything else unexpected) counts as not-running.
+    return (e as NodeJS.ErrnoException)?.code === "EPERM";
+  }
 }

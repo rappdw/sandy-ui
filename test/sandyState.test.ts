@@ -105,72 +105,94 @@ describe("readLockPid", () => {
 });
 
 describe("sweepStaleLocksIn", () => {
+  // Lock names below follow sandy's real format: .<sanitized-base>-<8hex>.lock
+
   it("returns empty result when sandbox dir doesn't exist", () => {
     const r = sweepStaleLocksIn(path.join(tmp, "nonexistent"), "/any/workspace");
     expect(r).toEqual({ cleaned: [], alive: [], unknown: [] });
   });
 
-  it("ignores files that don't match the workspace basename prefix", () => {
-    writeLockFile(".other-workspace-deadbeef.lock", String(DEFINITELY_DEAD_PID));
-    writeLockFile(".myproject-cafebabe.lock",     String(DEFINITELY_DEAD_PID));
+  it("ignores locks belonging to a different workspace basename", () => {
+    writeLockFile(".other-deadbeef.lock",     String(DEFINITELY_DEAD_PID));
+    writeLockFile(".myproject-cafebabe.lock", String(DEFINITELY_DEAD_PID));
     const r = sweepStaleLocksIn(sandboxDir, "/path/to/myproject");
     expect(r.cleaned).toEqual([path.join(sandboxDir, ".myproject-cafebabe.lock")]);
-    expect(fs.existsSync(path.join(sandboxDir, ".other-workspace-deadbeef.lock"))).toBe(true);
+    expect(fs.existsSync(path.join(sandboxDir, ".other-deadbeef.lock"))).toBe(true);
   });
 
-  it("ignores entries that don't end in .lock (defensive)", () => {
-    writeLockFile(".myproject-aaa.lock.tmp",       String(DEFINITELY_DEAD_PID));
-    writeLockFile(".myproject-aaa.lockfile",       String(DEFINITELY_DEAD_PID));
-    writeLockFile(".myproject-aaa.lock",           String(DEFINITELY_DEAD_PID));
+  it("does NOT claim a sibling project whose name extends this one (foo vs foo-2)", () => {
+    // The old loose prefix match (`.foo-`) would have swept .foo-2-<hash>.lock
+    // — and the orphan flow would then offer to SIGTERM foo-2's live sandy.
+    writeLockFile(".foo-2-a1b2c3d4.lock", String(process.pid));           // sibling, LIVE
+    writeLockFile(".foo-0badcafe.lock",   String(DEFINITELY_DEAD_PID));   // ours, dead
+    const r = sweepStaleLocksIn(sandboxDir, "/dev/foo");
+    expect(r.cleaned).toEqual([path.join(sandboxDir, ".foo-0badcafe.lock")]);
+    expect(r.alive).toEqual([]);   // sibling's lock must not even be inspected
+    expect(fs.existsSync(path.join(sandboxDir, ".foo-2-a1b2c3d4.lock"))).toBe(true);
+  });
+
+  it("sanitizes the workspace basename the way sandy does (tr -cd 'a-zA-Z0-9._-')", () => {
+    // Workspace "my project!" → sandy's DIR_BASE "myproject" → lock name uses that.
+    writeLockFile(".myproject-12345678.lock", String(DEFINITELY_DEAD_PID));
+    const r = sweepStaleLocksIn(sandboxDir, "/x/my project!");
+    expect(r.cleaned).toHaveLength(1);
+  });
+
+  it("ignores entries without the exact .lock suffix / 8-hex hash shape", () => {
+    writeLockFile(".myproject-deadbeef.lock.tmp", String(DEFINITELY_DEAD_PID));
+    writeLockFile(".myproject-deadbeef.lockfile", String(DEFINITELY_DEAD_PID));
+    writeLockFile(".myproject-abc.lock",          String(DEFINITELY_DEAD_PID)); // hash too short
+    writeLockFile(".myproject-deadbeef.lock",     String(DEFINITELY_DEAD_PID));
     const r = sweepStaleLocksIn(sandboxDir, "/x/myproject");
-    expect(r.cleaned).toEqual([path.join(sandboxDir, ".myproject-aaa.lock")]);
+    expect(r.cleaned).toEqual([path.join(sandboxDir, ".myproject-deadbeef.lock")]);
     expect(r.alive).toEqual([]);
-    expect(fs.existsSync(path.join(sandboxDir, ".myproject-aaa.lock.tmp"))).toBe(true);
-    expect(fs.existsSync(path.join(sandboxDir, ".myproject-aaa.lockfile"))).toBe(true);
+    expect(fs.existsSync(path.join(sandboxDir, ".myproject-deadbeef.lock.tmp"))).toBe(true);
+    expect(fs.existsSync(path.join(sandboxDir, ".myproject-deadbeef.lockfile"))).toBe(true);
+    expect(fs.existsSync(path.join(sandboxDir, ".myproject-abc.lock"))).toBe(true);
   });
 
   it("cleans dead-PID file locks", () => {
-    writeLockFile(".ws-1.lock", String(DEFINITELY_DEAD_PID));
+    writeLockFile(".ws-00000001.lock", String(DEFINITELY_DEAD_PID));
     const r = sweepStaleLocksIn(sandboxDir, "/whatever/ws");
     expect(r.cleaned).toHaveLength(1);
     expect(r.alive).toEqual([]);
-    expect(fs.existsSync(path.join(sandboxDir, ".ws-1.lock"))).toBe(false);
+    expect(fs.existsSync(path.join(sandboxDir, ".ws-00000001.lock"))).toBe(false);
   });
 
   it("cleans dead-PID directory locks (recursive removal)", () => {
-    writeLockDir(".ws-2.lock", { pid: String(DEFINITELY_DEAD_PID), workspace: "/whatever/ws" });
+    writeLockDir(".ws-00000002.lock", { pid: String(DEFINITELY_DEAD_PID), workspace: "/whatever/ws" });
     const r = sweepStaleLocksIn(sandboxDir, "/whatever/ws");
     expect(r.cleaned).toHaveLength(1);
-    expect(fs.existsSync(path.join(sandboxDir, ".ws-2.lock"))).toBe(false);
+    expect(fs.existsSync(path.join(sandboxDir, ".ws-00000002.lock"))).toBe(false);
   });
 
   it("preserves live-PID locks (uses current process as the sentinel)", () => {
-    writeLockFile(".ws-3.lock", String(process.pid));
+    writeLockFile(".ws-00000003.lock", String(process.pid));
     const r = sweepStaleLocksIn(sandboxDir, "/whatever/ws");
     expect(r.alive).toHaveLength(1);
     expect(r.cleaned).toEqual([]);
-    expect(fs.existsSync(path.join(sandboxDir, ".ws-3.lock"))).toBe(true);
+    expect(fs.existsSync(path.join(sandboxDir, ".ws-00000003.lock"))).toBe(true);
   });
 
   it("buckets unparseable locks separately and leaves them alone", () => {
-    writeLockFile(".ws-4.lock", "garbage no pid here");
+    writeLockFile(".ws-00000004.lock", "garbage no pid here");
     const r = sweepStaleLocksIn(sandboxDir, "/whatever/ws");
     expect(r.unknown).toHaveLength(1);
     expect(r.cleaned).toEqual([]);
     expect(r.alive).toEqual([]);
-    expect(fs.existsSync(path.join(sandboxDir, ".ws-4.lock"))).toBe(true);
+    expect(fs.existsSync(path.join(sandboxDir, ".ws-00000004.lock"))).toBe(true);
   });
 
   it("handles a mix of dead/live/unknown across multiple locks for one workspace", () => {
-    writeLockFile(".myws-aaa.lock", String(DEFINITELY_DEAD_PID));   // cleaned
-    writeLockFile(".myws-bbb.lock", String(process.pid));            // alive
-    writeLockFile(".myws-ccc.lock", "garbage");                       // unknown
-    writeLockFile(".other-zzz.lock", String(DEFINITELY_DEAD_PID));   // ignored (different basename)
+    writeLockFile(".myws-aaaaaaaa.lock", String(DEFINITELY_DEAD_PID));   // cleaned
+    writeLockFile(".myws-bbbbbbbb.lock", String(process.pid));            // alive
+    writeLockFile(".myws-cccccccc.lock", "garbage");                       // unknown
+    writeLockFile(".other-dddddddd.lock", String(DEFINITELY_DEAD_PID));  // ignored (different basename)
     const r = sweepStaleLocksIn(sandboxDir, "/x/myws");
     expect(r.cleaned).toHaveLength(1);
     expect(r.alive).toHaveLength(1);
     expect(r.unknown).toHaveLength(1);
     // The other-workspace lock is untouched
-    expect(fs.existsSync(path.join(sandboxDir, ".other-zzz.lock"))).toBe(true);
+    expect(fs.existsSync(path.join(sandboxDir, ".other-dddddddd.lock"))).toBe(true);
   });
 });
