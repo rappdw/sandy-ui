@@ -53,7 +53,7 @@ export function activate(ctx: vscode.ExtensionContext) {
     const sessions = supervisor.getAllSessions();
     if (sessions.length === 0) { statusBar.hide(); return; }
     const detachedCount = sessions.filter(s => !s.panel).length;
-    statusBar.text = `$(server-process) ${sessions.length} sandy${sessions.length === 1 ? "" : ""}`
+    statusBar.text = `$(server-process) ${sessions.length} sandy`
       + (detachedCount > 0 ? ` ($(eye-closed) ${detachedCount} detached)` : "");
     statusBar.tooltip = sessions
       .map(s => `${s.workspacePath}  •  ${s.panel ? "attached" : "detached"}  •  pid=${s.pty.pid}`)
@@ -339,6 +339,15 @@ async function launchWithWorkspaceSwitch(
   if (!supervisor) return;  // not activated yet (shouldn't happen in practice)
   // No target — defer to openTerminalPanel which prompts for a folder.
   if (!targetWs) return openTerminalPanel(ctx, supervisor, undefined);
+
+  // A live session (attached or detached) for the target already exists in
+  // THIS extension host — attach in place, regardless of which folder VSCode
+  // has open. The old path fell through to vscode.openFolder for a workspace
+  // mismatch, and the window reload killed the extension host AND the PTY:
+  // "re-attach" destroyed the very session it promised to restore (B5).
+  if (supervisor.getSession(targetWs)) {
+    return openTerminalPanel(ctx, supervisor, targetWs);
+  }
 
   const currentWs = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 

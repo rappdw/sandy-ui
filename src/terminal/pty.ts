@@ -1,4 +1,3 @@
-import * as nodePty from "node-pty";
 import * as os from "os";
 import * as path from "path";
 
@@ -72,6 +71,11 @@ export function buildCleanEnv(extra: Record<string, string> = {}): Record<string
 }
 
 export function spawnPty(opts: SpawnOpts): PtyHandle {
+  // Lazy-require node-pty so importing this module for its pure helpers
+  // (augmentPath, buildCleanEnv, launchCandidates) never loads the native
+  // binding — that load fails outright off-platform (unit tests on a
+  // different OS/arch) and is wasted startup cost when nothing spawns.
+  const nodePty = require("node-pty") as typeof import("node-pty");
   const proc = nodePty.spawn(opts.command, opts.args, {
     name: opts.env.TERM ?? "xterm-256color",
     cols: opts.cols,
@@ -81,7 +85,7 @@ export function spawnPty(opts: SpawnOpts): PtyHandle {
   });
   return {
     pid: proc.pid,
-    write: (d) => proc.write(d),
+    write: (d) => { try { proc.write(d); } catch { /* PTY may have exited */ } },
     resize: (c, r) => { try { proc.resize(c, r); } catch { /* PTY may have exited */ } },
     onData: (cb) => proc.onData(cb),
     onExit: (cb) => proc.onExit(({ exitCode, signal }) => cb(exitCode, signal)),

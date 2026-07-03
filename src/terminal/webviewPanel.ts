@@ -52,6 +52,15 @@ export async function openTerminalPanel(
   // If a session already exists for this workspace, this is a re-attach —
   // skip preflight (already done at original spawn) and reuse the live PTY.
   const existingSession = supervisor.getSession(ws);
+
+  // Already attached to a live panel? Reveal that panel instead of creating
+  // a second one — a duplicate would silently steal the PTY stream and leave
+  // the first tab frozen (review finding B6).
+  if (existingSession?.panel) {
+    existingSession.panel.reveal(existingSession.panel.viewColumn ?? vscode.ViewColumn.Active, false);
+    return;
+  }
+
   const isReattach = existingSession !== undefined;
 
   let approveEnv: Record<string, string> = {};
@@ -112,7 +121,7 @@ export async function openTerminalPanel(
   const pushScrollSensitivity = () => {
     const value = vscode.workspace
       .getConfiguration("sandy.terminal")
-      .get<number>("scrollSensitivity", 1);
+      .get<number>("scrollSensitivity", 2);  // fallback matches package.json default
     panel.webview.postMessage(<FromHost>{ type: "scrollSensitivity", value });
   };
   pushScrollSensitivity();
@@ -317,6 +326,9 @@ export async function openTerminalPanel(
   // layout settle before measuring.
   panel.onDidChangeViewState(e => {
     if (e.webviewPanel.visible) {
+      // Clear the OSC-notification badge — ● means "unseen activity", and
+      // the user just looked (review finding B7).
+      if (panel.title.startsWith("● ")) panel.title = panel.title.slice(2);
       panel.webview.postMessage({ type: "refit" });
     }
   });

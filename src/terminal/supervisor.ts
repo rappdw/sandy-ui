@@ -136,12 +136,23 @@ export class PtySupervisor implements vscode.Disposable {
     if (!session || session.exited) return;
     this.log(`stopping session workspace=${workspacePath} pid=${session.pty.pid}`);
     try { session.pty.kill("SIGINT"); } catch { /* may already be dead */ }
-    await sleep(3_000);
-    if (session.exited) return;
+    if (await this.waitForExit(session, 3_000)) return;
     try { session.pty.kill("SIGTERM"); } catch { /* swallow */ }
-    await sleep(2_000);
-    if (session.exited) return;
+    if (await this.waitForExit(session, 2_000)) return;
     try { session.pty.kill("SIGKILL"); } catch { /* swallow */ }
+  }
+
+  // Resolves true as soon as the session exits, false at the timeout. The
+  // fixed sleep() this replaces held tab-close disposal for the full 3s+2s
+  // escalation window even when sandy exited instantly.
+  private waitForExit(session: Session, timeoutMs: number): Promise<boolean> {
+    if (session.exited) return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      let done = false;
+      const finish = (v: boolean) => { if (!done) { done = true; clearTimeout(timer); resolve(v); } };
+      const timer = setTimeout(() => finish(session.exited), timeoutMs);
+      session.pty.onExit(() => finish(true));
+    });
   }
 
   /**
