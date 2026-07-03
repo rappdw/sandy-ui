@@ -79,6 +79,13 @@ export function partitionByTier(schema: Schema, kv: Record<string, string>): { c
 // `.sandy/` directory at that scope. Workspace-scoped secrets in a git repo
 // are a footgun (commit risk) — the UI surfaces a warning about that, but
 // doesn't refuse the write.
+//
+// Empty-string values mean "clear this key": the settings webview sends ""
+// for fields the user emptied (and for agent_combo with nothing checked).
+// Merging existing-over-incoming would silently resurrect the old value on
+// save — the user cleared a field, hit Save, and the value came back.
+// Secrets are exempt from this convention: the UI's blank-secret input means
+// "keep current value" and collect() never sends blank secrets.
 export function saveScope(
   scope: Scope,
   workspaceFsPath: string | undefined,
@@ -90,8 +97,16 @@ export function saveScope(
   const secretsTarget = secretsPathFor(scope, workspaceFsPath);
   const existingConfig  = readKv(configTarget);
   const existingSecrets = readKv(secretsTarget);
-  writeKvAtomic(configTarget,  { ...existingConfig,  ...config  }, 0o644);
-  if (Object.keys(secrets).length > 0 || Object.keys(existingSecrets).length > 0) {
-    writeKvAtomic(secretsTarget, { ...existingSecrets, ...secrets }, 0o600);
+
+  const mergedConfig: Record<string, string> = { ...existingConfig };
+  for (const [k, v] of Object.entries(config)) {
+    if (v === "") delete mergedConfig[k];
+    else mergedConfig[k] = v;
+  }
+  writeKvAtomic(configTarget, mergedConfig, 0o644);
+
+  const nonEmptySecrets = Object.fromEntries(Object.entries(secrets).filter(([, v]) => v !== ""));
+  if (Object.keys(nonEmptySecrets).length > 0 || Object.keys(existingSecrets).length > 0) {
+    writeKvAtomic(secretsTarget, { ...existingSecrets, ...nonEmptySecrets }, 0o600);
   }
 }

@@ -89,6 +89,8 @@ type ToHost =
   // ---- State ---------------------------------------------------------------
   let schema: Schema | null = null;
   let activeScope: Scope = "workspace";  // default to project; falls back to home if no workspace
+  // Values captured at save-click, committed on the host's "saved" ack.
+  let pendingSave: { scope: Scope; values: Record<string, string> } | null = null;
   const emptyScope = (): ScopeState => ({
     configPath: "", secretsPath: "",
     values: {}, initial: {}, form: {},
@@ -138,7 +140,11 @@ type ToHost =
       renderActive();
     } else if (m.type === "saved") {
       const scope = m.scope || activeScope;
-      const v = collect();
+      // Use the payload captured at save-click, NOT a fresh collect(): the
+      // ack is async, and if the user switched tabs in between, collect()
+      // would read the OTHER scope's DOM into this scope's baseline.
+      const v = pendingSave && pendingSave.scope === scope ? pendingSave.values : collect();
+      pendingSave = null;
       scopes[scope].initial = { ...v };
       scopes[scope].form    = { ...v };
       // After save, any non-blank secret value in the form is now stored.
@@ -203,7 +209,6 @@ type ToHost =
       // visual differentiation.
       form.appendChild(renderField(f, s.form[f.key] ?? (f.default as string | undefined), s.secretsPresent));
     }
-    bindFormChanges();
   }
 
   function renderField(f: FieldDef, value: string | undefined, secretsPresent: Record<string, boolean>): HTMLElement {
@@ -335,7 +340,9 @@ type ToHost =
         if (!labelEl?.textContent) continue;
         const k = labelEl.textContent.trim().split(/\s/)[0];
         const vals = Array.from(groupKey.querySelectorAll("input:checked")).map(c => (c as HTMLInputElement).value);
-        if (vals.length) out[k] = vals.join(",");
+        // "" when nothing is checked → host clears the key (unchecking every
+        // agent previously kept the old SANDY_AGENT — review finding B2).
+        out[k] = vals.join(",");
         continue;
       }
       const keyEl = row.querySelector("[data-key]") as (HTMLInputElement | HTMLSelectElement | null);
@@ -343,13 +350,19 @@ type ToHost =
       const k = keyEl.dataset.key!;
       const t = keyEl.dataset.type!;
       if (t === "bool") {
-        out[k] = (keyEl as HTMLInputElement).checked ? "1" : "0";
+        // "true"/"false" — sandy's bash tests literal `= "true"` and its node
+        // paths test `!== 'false'`; the old "1"/"0" encoding matched NEITHER,
+        // so unchecking SANDY_SKIP_PERMISSIONS left the bypass active (review
+        // finding B1).
+        out[k] = (keyEl as HTMLInputElement).checked ? "true" : "false";
       } else if (t === "secret") {
         const v = (keyEl as HTMLInputElement).value;
         if (v) out[k] = v;  // skip blank — keeps existing
       } else {
-        const v = keyEl.value;
-        if (v !== "") out[k] = v;
+        // Include empty values: "" tells the host to CLEAR the key. Dropping
+        // empties meant the host's merge silently resurrected the old value
+        // (review finding B2).
+        out[k] = keyEl.value;
       }
     }
     return out;
@@ -361,18 +374,38 @@ type ToHost =
     saveState();
   }
 
-  function bindFormChanges(): void {
-    $("form").addEventListener("input", persistFormFromDom);
-  }
+  // Bound ONCE — renderActive() used to re-add this listener on every render,
+  // accumulating duplicate handlers (review finding B13).
+  $("form").addEventListener("input", persistFormFromDom);
 
   function saveState(): void {
-    vscode.setState<PersistedState>({ schema, activeScope, scopes });
+    // Never persist typed-but-unsaved SECRET values through webview state —
+    // setState lands in VSCode's workspace storage in plaintext (review
+    // finding S2). Hide/show loses an unsaved secret entry; acceptable.
+    const secretKeys = new Set(
+      (schema?.fields ?? [])
+        .filter(f => f.type === "secret" || f.tier === "secrets")
+        .map(f => f.key),
+    );
+    const stripSecrets = (r: Record<string, string>): Record<string, string> => {
+      if (secretKeys.size === 0) return r;
+      const o = { ...r };
+      for (const k of secretKeys) delete o[k];
+      return o;
+    };
+    const sanitizeScope = (s: ScopeState): ScopeState => ({ ...s, form: stripSecrets(s.form) });
+    vscode.setState<PersistedState>({
+      schema, activeScope,
+      scopes: { home: sanitizeScope(scopes.home), workspace: sanitizeScope(scopes.workspace) },
+    });
   }
 
   // ---- Save / Revert -------------------------------------------------------
   $("save").addEventListener("click", () => {
     persistFormFromDom();
-    vscode.postMessage({ type: "save", scope: activeScope, values: collect() } satisfies ToHost);
+    const values = collect();
+    pendingSave = { scope: activeScope, values };
+    vscode.postMessage({ type: "save", scope: activeScope, values } satisfies ToHost);
   });
   $("revert").addEventListener("click", () => {
     scopes[activeScope].form = { ...scopes[activeScope].initial };

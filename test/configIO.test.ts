@@ -233,4 +233,21 @@ describe("saveScope (workspace tmp-dir, never touches HOME)", () => {
     expect(fs.statSync(workspaceConfigPath(tmp)).mode  & 0o777).toBe(0o644);
     expect(fs.statSync(workspaceSecretsPath(tmp)).mode & 0o777).toBe(0o600);
   });
+
+  it("empty-string value CLEARS the key instead of resurrecting the old value (B2)", () => {
+    writeKvAtomic(workspaceConfigPath(tmp), { SANDY_AGENT: "claude", SANDY_PRE_EXISTING: "kept" });
+    saveScope("workspace", tmp, schema, { SANDY_AGENT: "" });
+    expect(readKv(workspaceConfigPath(tmp))).toEqual({ SANDY_PRE_EXISTING: "kept" });
+  });
+
+  it("empty-string value for a key not on disk is a no-op", () => {
+    saveScope("workspace", tmp, schema, { SANDY_AGENT: "" });
+    expect(readKv(workspaceConfigPath(tmp))).toEqual({});
+  });
+
+  it("empty-string never deletes or writes SECRETS (blank secret means keep)", () => {
+    writeKvAtomic(workspaceSecretsPath(tmp), { ANTHROPIC_API_KEY: "sk-keep" });
+    saveScope("workspace", tmp, schema, { ANTHROPIC_API_KEY: "" });
+    expect(readKv(workspaceSecretsPath(tmp))).toEqual({ ANTHROPIC_API_KEY: "sk-keep" });
+  });
 });

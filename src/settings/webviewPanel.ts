@@ -111,12 +111,23 @@ export function openSettingsPanel(ctx: vscode.ExtensionContext) {
           const secretsTarget = secretsPathFor(scope, ws);
           const verifyConfig  = readKv(configTarget);
           const verifySecrets = readKv(secretsTarget);
+          // Read-back verification logs key names + status ONLY — never the
+          // values. The old form printed plaintext values (including secrets)
+          // to this output channel (review finding S1). "" incoming means the
+          // key was cleared, so verify absence rather than equality.
           for (const [k, v] of Object.entries(incoming)) {
             const got = verifyConfig[k] ?? verifySecrets[k];
-            if (got !== v) log(`MISMATCH ${k}: wrote=${JSON.stringify(v)} read-back=${JSON.stringify(got)}`);
-            else log(`ok ${k}=${JSON.stringify(got)} (in ${verifyConfig[k] != null ? "config" : "secrets"})`);
+            const where = verifyConfig[k] != null ? "config" : verifySecrets[k] != null ? "secrets" : "absent";
+            if (v === "") {
+              if (got === undefined) log(`ok ${k} (cleared)`);
+              else log(`MISMATCH ${k}: expected cleared, still present in ${where}`);
+            } else if (got !== v) {
+              log(`MISMATCH ${k}: read-back differs (values not logged; len wrote=${v.length} read=${got?.length ?? 0})`);
+            } else {
+              log(`ok ${k} (${where})`);
+            }
           }
-          const wroteSecrets = Object.keys(incoming).some(k => verifySecrets[k] != null);
+          const wroteSecrets = Object.keys(incoming).some(k => incoming[k] !== "" && verifySecrets[k] != null);
           vscode.window.showInformationMessage(`Saved to ${configTarget}${wroteSecrets ? ` and ${secretsTarget}` : ""}`);
           panel.webview.postMessage({ type: "saved", scope });
         } catch (e: any) {
