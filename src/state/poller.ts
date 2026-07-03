@@ -75,9 +75,9 @@ export class StatePoller implements vscode.Disposable {
       }
       // "light" asks sandy to skip the expensive installed_images section and
       // probe docker reachability with a single `docker ps` (9 docker spawns
-      // → 1; handoffs/sandy-print-state-light.md). Current sandy ignores the
-      // extra arg, so this is safe to pass unconditionally — the speedup
-      // activates when the sandy-side change ships.
+      // → 1; rappdw/sandy#18). Current sandy ignores the extra arg, so this
+      // is safe to pass unconditionally — the speedup activates when the
+      // sandy-side change ships.
       cp.execFile(sandyBin, ["--print-state", "light"], {
         encoding: "utf8",
         timeout: 10_000,
@@ -95,8 +95,8 @@ export class StatePoller implements vscode.Disposable {
         try {
           const state = JSON.parse(stdout) as SandyState;
           // Bridge until sandy --print-state surfaces workspace_path itself
-          // (handoffs/sandy-print-state-workspace-path.md). Reads each
-          // sandbox's WORKSPACE.json to recover the field.
+          // (rappdw/sandy#19). Reads each sandbox's WORKSPACE.json to
+          // recover the field.
           enrichWithWorkspaceJson(state);
           resolve({ state, fetched_at });
         } catch (e: any) {

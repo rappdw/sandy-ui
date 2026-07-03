@@ -3,10 +3,10 @@
 > **Purpose**: paste the body of this file as the prompt to a Claude (or other
 > coding agent) working in the **dotfiles** repo. This is the *prototype* tier
 > of a three-tier plan: validate the flow as a standalone script here, feed
-> findings back into the full `sandy teleport` subcommand (specified in the
-> sandy-ui repo at `handoffs/sandy-teleport.md`, to be handed to the sandy
-> repo), and finish with thin sandy-ui integration. Treat this script as a
-> proving ground — correctness and safety gates matter, polish doesn't.
+> findings back into the full `sandy teleport` subcommand (tracked upstream at
+> <https://github.com/rappdw/sandy/issues/16>), and finish with thin sandy-ui
+> integration. Treat this script as a proving ground — correctness and safety
+> gates matter, polish doesn't.
 
 ---
 
@@ -169,7 +169,7 @@ note it as the first thing the real `sandy teleport` subsumes.
 ## Feed findings back
 
 Anything learned here (hash edge cases, rsync surprises, resume behavior,
-nested-tmux ergonomics) should flow back into the full spec at
-`sandy-ui/handoffs/sandy-teleport.md` before that's handed to the sandy repo
-— that version adds `--print-state` integration, in-sandy launch refusal,
+nested-tmux ergonomics) should flow back as comments on the full spec at
+<https://github.com/rappdw/sandy/issues/16> before that's implemented — that
+version adds `--print-state` integration, in-sandy launch refusal,
 `--provision`, and the exit-code contract that sandy-ui's UI layer consumes.

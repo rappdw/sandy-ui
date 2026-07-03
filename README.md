@@ -84,7 +84,7 @@ src/
 media/                     # webview HTML/CSS/JS + bundled xterm.js + addons
 scripts/                   # copy-xterm build helper
 docs/SPIKE_RESULTS.md      # initial validation findings + production roadmap
-handoffs/                  # cross-repo task prompts (e.g., flock locking for sandy)
+handoffs/                  # task prompts for repos w/o an issue tracker (sandy asks live as rappdw/sandy issues)
 SPEC_SANDY_UI.md           # full architectural spec
 ```
 

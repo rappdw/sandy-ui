@@ -68,7 +68,7 @@ Each launched project opens a **webview tab in the editor area** (not VSCode's b
 - **Resize** via `ResizeObserver` on the terminal container (NOT `window.resize`, which misses VSCode's panel-layout settling). Initial PTY dimensions come from the webview's first `fit.fit()` measurement, not a hardcoded default — otherwise sandy renders into the upper-left corner until manual resize.
 - **Hide/show preserves scrollback** via `retainContextWhenHidden: true`. Switching to a sibling editor tab and back keeps sandy's screen intact.
 - **"Stop"** command per tab: sends `SIGINT` → waits 3s → `SIGTERM` → waits 2s → `SIGKILL`. Sandy's own cleanup trap handles container teardown. Without the wait, the trap is interrupted by SIGHUP from PTY closure and stale lock files / Docker networks survive.
-- **Stale-lock sweep on launch**: before spawning sandy, inspect `~/.sandy/sandboxes/.<basename>-*.lock` files for this workspace; if any has a dead PID, remove it. (Long-term, sandy itself should adopt flock(2) — see `/handoffs/sandy-flock-locking.md` — at which point this sweep becomes unnecessary.)
+- **Stale-lock sweep on launch**: before spawning sandy, inspect `~/.sandy/sandboxes/.<basename>-*.lock` files for this workspace; if any has a dead PID, remove it. (Long-term, sandy-side lock hardening — [rappdw/sandy#14](https://github.com/rappdw/sandy/issues/14); flock(2) was evaluated and rejected upstream since macOS ships no flock CLI — makes this sweep unnecessary.)
 - **"Detach"** command: closes the tab without stopping the subprocess. Re-attach re-binds a fresh PTY view to the existing process.
 - **No tmux-in-tmux** — sandy's own inner tmux is the only tmux in the stack. Sandy-ui must NOT host its own multiplexer.
 
@@ -361,7 +361,7 @@ Coordination:
 - `SPEC_INTROSPECTION.md` lives in the **sandy** repo as the contract.
 - `SPEC_SANDY_UI.md` (this file) lives in the **sandy** repo as architectural context, since the schema's design is influenced by UI consumers.
 - The sandy-ui repo links back to both specs and pins the `sandy` commit SHAs it's tested against in its CI matrix.
-- Cross-repo work is captured under `sandy-ui/handoffs/` as standalone task docs (e.g., `sandy-flock-locking.md`) that can be pasted into a Claude/agent in the sandy repo.
+- Cross-repo work is tracked as GitHub issues on the sandy repo (rappdw/sandy #16–#20, filed from former handoff docs with the full task spec embedded). `sandy-ui/handoffs/` holds standalone paste-into-an-agent task docs only for repos without a reachable issue tracker (e.g., the private dotfiles repo).
 
 In-repo layout:
 ```
@@ -376,7 +376,7 @@ sandy-ui/
     state/                     # poll --print-state, status bar
   media/                       # webview HTML/CSS + bundled xterm.js + addons
     webview-ui/                # TypeScript sources for webviews, esbuild-bundled
-  handoffs/                    # cross-repo task prompts (sandy, etc.)
+  handoffs/                    # task prompts for repos w/o a reachable issue tracker
   test/                        # @vscode/test-electron suites
   scripts/                     # copy-xterm, prepare-release
 ```
@@ -413,7 +413,7 @@ Integration tests (`@vscode/test-electron`, runs in a real VSCode):
 
 3. **cmux integration.** cmux is a popular terminal multiplexer that already understands sandy's OSC notification passthrough. If a user is running VSCode inside cmux, do we want to forward notifications outward (so cmux surfaces them to the OS) or intercept them in the extension? Recommended: intercept by default, with a setting to pass them through.
 
-4. **Sandy-side companion changes.** The spike surfaced three sandy-side asks captured as handoff docs in `sandy-ui/handoffs/`: (a) flock(2) locking to eliminate stale-lock races, (b) `set -g allow-passthrough on` and `terminal-features ":RGB"` in sandy's tmux.conf so OSC sequences and 24-bit color reach the outer terminal, (c) more aggressive Docker network teardown to prevent subnet pool exhaustion across many launch/dispose cycles. Each is independent and small; track them as separate sandy issues.
+4. **Sandy-side companion changes.** Resolved or tracked as sandy issues (July 2026 audit): (a) stale-lock races — flock(2) was evaluated and rejected upstream (macOS ships no flock CLI); the chosen fix is mkdir-mutex hardening, tracked at [rappdw/sandy#14](https://github.com/rappdw/sandy/issues/14). (b) `set -g allow-passthrough on` + `terminal-features ":RGB"` — **shipped** in sandy's generated tmux.conf. (c) Docker network teardown — partially shipped (lazy proxy-network reaper); the remainder (main `sandy_net_*` reaping, prune-on-startup, `--prune-orphans`) is [rappdw/sandy#20](https://github.com/rappdw/sandy/issues/20). Later dogfooding added [#16](https://github.com/rappdw/sandy/issues/16) (teleport), [#17](https://github.com/rappdw/sandy/issues/17) (daemon-mode), [#18](https://github.com/rappdw/sandy/issues/18) (print-state light), [#19](https://github.com/rappdw/sandy/issues/19) (workspace_path in print-state).
 
 5. **`--remote` mode handling.** sandy's `--remote` flag launches a remote-controlled Claude session (claude agent only). The extension in MVP does **not** handle `--remote` — there's nothing for it to show except the same TUI. In post-MVP, a dedicated "remote session" panel could surface the remote-control plane (pending questions, approval requests from remote triggers) without requiring the user to watch the TUI.
 

@@ -176,7 +176,7 @@ export async function openTerminalPanel(
         // Orphan-from-prior-VSCode-session handling. If sandy is genuinely
         // running (live PID lock) but the supervisor has no session for
         // this workspace, we lost track of it across a VSCode restart /
-        // crash / quit. Without sandy daemon-mode (handoff queued), we
+        // crash / quit. Without sandy daemon-mode (rappdw/sandy#17), we
         // can't transparently re-attach. Offer the user the choice:
         // stop & restart fresh, or cancel.
         if (aliveLocks.length > 0) {
@@ -189,8 +189,8 @@ export async function openTerminalPanel(
               modal: true,
               detail:
                 `A live lock exists (${pidLabel}). This usually means a previous VSCode quit interrupted sandy's cleanup trap, ` +
-                `or sandy was started outside sandy-ui. Sandy-ui can't transparently re-attach across VSCode restarts (yet — see ` +
-                `handoffs/sandy-daemon-mode.md).\n\n` +
+                `or sandy was started outside sandy-ui. Sandy-ui can't transparently re-attach across VSCode restarts (yet — ` +
+                `daemon-mode is tracked at github.com/rappdw/sandy/issues/17).\n\n` +
                 `"Stop existing & launch fresh" SIGTERMs the running sandy (its cleanup trap will run docker stop / network rm), ` +
                 `removes the lock, and starts a new session here.\n\n` +
                 `"Cancel" leaves everything as-is — you can attach via terminal: \`sandy --workspace ${ws}\`.`,

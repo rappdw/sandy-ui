@@ -3,9 +3,9 @@
 // the sandbox's WORKSPACE.json file directly.
 //
 // This is a temporary bridge — sandy should be reading WORKSPACE.json itself
-// in --print-state. See handoffs/sandy-print-state-workspace-path.md.
-// Once that lands, this enrichment becomes a no-op (workspace_path will
-// already be set, the loop short-circuits per entry).
+// in --print-state. Tracked upstream as rappdw/sandy#19. Once that lands,
+// this enrichment becomes a no-op (workspace_path will already be set, the
+// loop short-circuits per entry).
 
 import * as fs from "fs";
 import * as path from "path";
