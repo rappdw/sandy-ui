@@ -251,23 +251,34 @@ type FromHost =
     let appWantsMouse = false;
 
     // params entries can be number | number[] (sub-params); compare on heads.
-    const allMouseTracking = (params: (number | number[])[]): boolean => {
-      const codes = params.map((p) => (Array.isArray(p) ? p[0] : p));
-      return codes.length > 0 && codes.every((c) => MOUSE_TRACKING_MODES.has(c));
+    // (DECSET params carry no sub-params in practice, so heads are enough to
+    // reconstruct the passthrough sequence below.)
+    const splitModes = (params: (number | number[])[]) => {
+      const heads = params.map((p) => (Array.isArray(p) ? p[0] : p));
+      return {
+        tracking: heads.filter((c) => MOUSE_TRACKING_MODES.has(c)),
+        rest:     heads.filter((c) => !MOUSE_TRACKING_MODES.has(c)),
+      };
     };
 
     // Most-recently-added CSI handler runs FIRST; returning true consumes the
     // sequence so xterm's built-in DECSET/DECRST never runs (mouse mode stays
-    // off). Only consume when the sequence is purely mouse-tracking modes — a
-    // mixed sequence (rare) passes through untouched so we never eat 1049 etc.
-    term.parser.registerCsiHandler({ prefix: "?", final: "h" }, (params) => {
-      if (allMouseTracking(params)) { appWantsMouse = true; return true; }
-      return false;
-    });
-    term.parser.registerCsiHandler({ prefix: "?", final: "l" }, (params) => {
-      if (allMouseTracking(params)) { appWantsMouse = false; return true; }
-      return false;
-    });
+    // off). Mixed sequences (tracking + other modes in one CSI, e.g.
+    // `?1000;1006h`) are split: consume the whole thing, flip our tracking
+    // state, and re-inject the non-tracking modes via term.write so xterm
+    // still applies them. term.write is queue-based, so writing from inside a
+    // parser callback is safe — it's appended after the current chunk.
+    // Previously a mixed sequence passed through whole and quietly re-enabled
+    // mouse tracking, breaking native selection (review finding B10).
+    const makeDecModeHandler = (final: "h" | "l") => (params: (number | number[])[]): boolean => {
+      const { tracking, rest } = splitModes(params);
+      if (tracking.length === 0) return false;  // nothing of ours — xterm handles it
+      appWantsMouse = final === "h";
+      if (rest.length > 0) term.write(`\x1b[?${rest.join(";")}${final}`);
+      return true;
+    };
+    term.parser.registerCsiHandler({ prefix: "?", final: "h" }, makeDecModeHandler("h"));
+    term.parser.registerCsiHandler({ prefix: "?", final: "l" }, makeDecModeHandler("l"));
 
     // Trackpad inertia spills a phantom wheel event right at the end of a
     // selection drag (the tail of the two-finger gesture). Without this guard
@@ -289,6 +300,9 @@ type FromHost =
     // asked for mouse (bare prompt), return true so xterm scrolls its own
     // scrollback normally.
     term.attachCustomWheelEventHandler((ev: WheelEvent): boolean => {
+      // Pure-horizontal events (deltaY 0) aren't ours: don't inject, don't
+      // reset the vertical bank — just let xterm ignore them (finding B11).
+      if (ev.deltaY === 0) return true;
       if (!appWantsMouse) return true;
       // Within the post-selection guard window: swallow without injecting or
       // clearing, so releasing a selection never scrolls or drops it.
