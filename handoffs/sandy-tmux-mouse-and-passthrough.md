@@ -4,15 +4,15 @@
 > coding agent) running in a clone of `github.com/rappdw/sandy`. Surfaced from
 > sandy-ui dogfooding.
 
-> **Status (updated June 2026)**: the **mouse/selection half is no longer
-> blocking** — sandy-ui v0.4.0 solves it host-side by splitting tmux's mouse
-> switch in the webview (swallow mouse-tracking DECSET so drag selects
-> natively, re-inject only the wheel so tmux still scrolls). So the env-var
-> mouse-off ask below is now a *nice-to-have* that would let sandy-ui retire
-> its workaround — not a requirement. **The live, unaddressed ask is OSC
-> passthrough** (`set -g allow-passthrough on`): OSC 9 / 52 / 777 emitted from
-> programs inside sandy's tmux are still silently dropped before reaching the
-> outer terminal. Prioritize that part.
+> **Status (July 2026): OBSOLETE — verified shipped/moot against sandy main;
+> no issue filed.** Both halves are resolved:
+> - **OSC passthrough**: sandy's generated tmux.conf now sets
+>   `set -g allow-passthrough on` (and `terminal-features ":RGB"`) — the
+>   passthrough ask below shipped upstream.
+> - **Mouse/selection**: solved host-side in sandy-ui v0.4.0 (webview splits
+>   tmux's mouse switch: drag selects natively, wheel still reaches tmux).
+>   The env-var mouse-off gate below is unneeded — no consumer wants it.
+> Kept for historical context only.
 
 ---
 

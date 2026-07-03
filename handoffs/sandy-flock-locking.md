@@ -1,5 +1,14 @@
 # Handoff: replace PID-based workspace locking with flock(2) in sandy
 
+> **Status (July 2026): SUPERSEDED — do not implement.** Sandy evaluated and
+> rejected flock(2): macOS doesn't ship a flock CLI, and sandy's lock is a
+> cross-platform mkdir-mutex by deliberate choice (see the comment above the
+> `SANDY_WORKSPACE_LOCK` acquisition in the sandy script). The problem this
+> handoff targets — stale-lock races — is instead tracked upstream as
+> [rappdw/sandy#14](https://github.com/rappdw/sandy/issues/14) (atomic
+> stale-lock takeover + PID-owned lock release + signal-trap exit). Kept for
+> historical context only.
+
 > **Purpose**: paste the body of this file as the prompt to a Claude (or other
 > coding agent) running in a clone of `github.com/rappdw/sandy`. Surfaced from
 > the sandy-ui spike (`/spike/SPIKE_RESULTS.md`) as the gold-standard fix for a
