@@ -18,7 +18,6 @@ type ToHost =
   | { type: "log";    level: "info" | "error"; msg: string };
 
 type FromHost =
-  | { type: "init"; cols: number; rows: number }
   | { type: "data"; data: string }
   | { type: "exit"; code: number }
   | { type: "refit" }

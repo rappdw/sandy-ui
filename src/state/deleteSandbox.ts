@@ -40,9 +40,11 @@ export function deleteSandboxDir(sandboxPath: string, sandboxesRoot: string = SA
 function removePathInsideRoot(targetPath: string, rootPath: string, kind: string): DeleteResult {
   if (!targetPath) return { ok: false, error: `no path provided for ${kind}` };
 
-  // Normalize both paths and verify containment. resolve() collapses .. and
-  // symbolic moves; the check below catches "../../../tmp" attacks and
-  // anything outside the allowed root.
+  // Normalize both paths and verify containment. resolve() collapses ".."
+  // segments (it does NOT follow symlinks — but rmSync unlinks a symlink
+  // rather than traversing into its target, so a link inside the root can't
+  // be used to delete content outside it). The check below catches
+  // "../../../tmp" attacks and anything outside the allowed root.
   const resolved   = path.resolve(targetPath);
   const rootResolved = path.resolve(rootPath);
   const rel = path.relative(rootResolved, resolved);

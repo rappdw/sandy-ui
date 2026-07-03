@@ -99,10 +99,10 @@ export function spawnPty(opts: SpawnOpts): PtyHandle {
 // even when existsSync says they're there).
 export function launchCandidates(): { command: string; args: string[] }[] {
   const fs = require("fs") as typeof import("fs");
-  const paths = (process.env.PATH ?? "").split(":");
+  const paths = (process.env.PATH ?? "").split(path.delimiter);
   const findExecutable = (bin: string): string | null => {
     for (const p of paths) {
-      const full = `${p}/${bin}`;
+      const full = path.join(p, bin);
       try { fs.accessSync(full, fs.constants.X_OK); return full; }
       catch { /* not executable here, try next */ }
     }

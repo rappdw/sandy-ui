@@ -176,7 +176,7 @@ function describe(s: SandySandbox, badge: SandboxBadge): string {
 
 function tooltipFor(s: SandySandbox, badge: SandboxBadge): string {
   const lines = [
-    `Workspace: ${s.workspace_path}`,
+    `Workspace: ${s.workspace_path ?? "(unknown — sandbox has no workspace_path)"}`,
     `Sandbox:   ${s.name}`,
     `State:     ${badge}` + (s.lock_held ? ` (lock pid ${s.lock_holder_pid ?? "?"})` : ""),
   ];
