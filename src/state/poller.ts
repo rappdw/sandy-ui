@@ -21,16 +21,25 @@ export class StatePoller implements vscode.Disposable {
   private latest: StateResolution = { fetched_at: new Date(0) };
   private timer: NodeJS.Timeout | undefined;
   private inFlight = false;
+  private cadenceMs: number | undefined;
 
-  constructor(
-    private readonly intervalMs: number = 5_000,
-    private readonly out?: vscode.OutputChannel,
-  ) {}
+  constructor(private readonly out?: vscode.OutputChannel) {}
 
-  start(): void {
-    this.refresh();  // immediate first fetch
-    if (this.timer) return;
-    this.timer = setInterval(() => { void this.refresh(); }, this.intervalMs);
+  /**
+   * Set the polling interval; undefined stops polling entirely. Called by
+   * extension.ts whenever tree-view visibility or window focus changes (see
+   * state/cadence.ts for the policy and the cost rationale). Speeding up —
+   * including resuming from stopped — triggers an immediate refresh so the
+   * tree is never stale right after the user brings the view back.
+   */
+  setCadence(ms: number | undefined): void {
+    if (ms === this.cadenceMs) return;
+    const prev = this.cadenceMs;
+    this.cadenceMs = ms;
+    if (this.timer) { clearInterval(this.timer); this.timer = undefined; }
+    if (ms === undefined) return;
+    if (prev === undefined || ms < prev) void this.refresh();
+    this.timer = setInterval(() => { void this.refresh(); }, ms);
   }
 
   dispose(): void {
@@ -64,7 +73,12 @@ export class StatePoller implements vscode.Disposable {
         resolve({ error: msg, fetched_at });
         return;
       }
-      cp.execFile(sandyBin, ["--print-state"], {
+      // "light" asks sandy to skip the expensive installed_images section and
+      // probe docker reachability with a single `docker ps` (9 docker spawns
+      // → 1; handoffs/sandy-print-state-light.md). Current sandy ignores the
+      // extra arg, so this is safe to pass unconditionally — the speedup
+      // activates when the sandy-side change ships.
+      cp.execFile(sandyBin, ["--print-state", "light"], {
         encoding: "utf8",
         timeout: 10_000,
         maxBuffer: 10 * 1024 * 1024,

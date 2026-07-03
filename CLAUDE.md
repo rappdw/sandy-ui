@@ -69,7 +69,7 @@ Errors from `--validate-config` are logged but **never block the launch** — sa
 
 ## State polling
 
-`src/state/poller.ts` (`StatePoller`) invokes `sandy --print-state` every 5s, parses the JSON, and emits a change event when the summary differs from the previous poll. The summary comparison ignores noisy fields (e.g., `size_bytes`) so the tree doesn't refresh unnecessarily; it only fires on sandbox count change, lock-state change, last_used_at change, or running-container set change.
+`src/state/poller.ts` (`StatePoller`) invokes `sandy --print-state`, parses the JSON, and emits a change event when the summary differs from the previous poll. **Cadence is gated, not fixed** (`src/state/cadence.ts`): 5s only while the Sandy tree view is visible in a focused window, 60s when the window loses focus, stopped entirely when the view is hidden. Rationale: each `--print-state` spawns ~9 docker CLI processes (docker info ×2, image inspect ×6 for the unused `installed_images` field, docker ps ×1) — an unconditional 5s poll in every VSCode window produced a sawtooth CPU pattern on macOS. Speeding up (including view-becomes-visible) triggers an immediate refresh so the tree is never stale. The sandy-side fix (1 docker spawn instead of 9) is the `sandy-print-state-light.md` handoff. The summary comparison ignores noisy fields (e.g., `size_bytes`) so the tree doesn't refresh unnecessarily; it only fires on sandbox count change, lock-state change, last_used_at change, or running-container set change.
 
 `src/projectsTree.ts` subscribes to the poller. Each TreeItem represents a sandbox; the icon is derived by `src/state/badge.ts` (running → debug-start, locked → lock, stale → clock, fresh → sparkle, current → terminal). Tree click invokes `sandy.launch` with `{workspacePath: <sandbox.workspace_path>}` so launching from the tree targets the right workspace, not whatever VSCode happens to have open.
 
@@ -90,7 +90,7 @@ The resolved path is cached per-process. `invalidateSandyPathCache()` is wired t
 
 ## Activation strategy
 
-`activationEvents: ["onStartupFinished"]`. Eager activation after VSCode startup is required so `resumePendingLaunchIfAny` runs even when the user doesn't click the Sandy activity bar. The trade-off: the StatePoller starts on every VSCode window (one `sandy --print-state` invocation every 5s, even in workspaces where the user isn't using sandy). Acceptable for now; revisit if the polling cost becomes annoying — could gate polling on the projects view actually being visible via `onDidChangeVisibility`.
+`activationEvents: ["onStartupFinished"]`. Eager activation after VSCode startup is required so `resumePendingLaunchIfAny` runs even when the user doesn't click the Sandy activity bar. Activation no longer implies polling: the StatePoller is cadence-gated on tree-view visibility + window focus (see "State polling"), so a window where the Sandy view is closed does zero `--print-state` invocations.
 
 ## Workspace-aware launch
 

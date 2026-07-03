@@ -8,6 +8,7 @@ import { openApprovalWebview } from "./approval/webviewModal";
 import { openSettingsPanel } from "./settings/webviewPanel";
 import { ProjectsTreeProvider } from "./projectsTree";
 import { StatePoller } from "./state/poller";
+import { pollCadence } from "./state/cadence";
 import { deleteSandboxDir, removeLockForSandbox, lockPathForSandbox } from "./state/deleteSandbox";
 import { invalidateSandyPathCache } from "./state/sandyPath";
 import { PtySupervisor } from "./terminal/supervisor";
@@ -20,8 +21,11 @@ let supervisor: PtySupervisor | undefined;
 
 export function activate(ctx: vscode.ExtensionContext) {
   const stateOut = vscode.window.createOutputChannel("Sandy State");
-  const poller   = new StatePoller(/* intervalMs */ 5_000, stateOut);
-  poller.start();
+  const poller   = new StatePoller(stateOut);
+  // Cadence is driven by tree-view visibility + window focus (wired below,
+  // after the tree view exists) — no unconditional polling. Every VSCode
+  // window used to poll `sandy --print-state` (≈9 docker spawns) every 5s
+  // forever, which showed up as a sawtooth CPU pattern on macOS.
 
   // Synthkit (md2email/md2doc/md2pdf right-click integration) gets its own
   // output channel — its activity is unrelated to sandy state polling.
@@ -30,6 +34,13 @@ export function activate(ctx: vscode.ExtensionContext) {
   supervisor = new PtySupervisor(stateOut);
 
   const projects = new ProjectsTreeProvider(poller, supervisor);
+
+  // createTreeView (not registerTreeDataProvider) so we get the visibility
+  // signal that gates polling.
+  const treeView = vscode.window.createTreeView("sandy.projects", { treeDataProvider: projects });
+  const updateCadence = () =>
+    poller.setCadence(pollCadence(treeView.visible, vscode.window.state.focused));
+  updateCadence();
 
   // Status bar item: count of running sandy sessions, click → quick-pick to
   // switch tabs. Hides when no sessions are live so it doesn't clutter the
@@ -72,7 +83,9 @@ export function activate(ctx: vscode.ExtensionContext) {
         void poller.refresh();
       }
     }),
-    vscode.window.registerTreeDataProvider("sandy.projects", projects),
+    treeView,
+    treeView.onDidChangeVisibility(updateCadence),
+    vscode.window.onDidChangeWindowState(updateCadence),
 
     // Palette + tree-default-click. If the target workspace differs from the
     // current one, we openFolder (reloads VSCode), persist a pending-launch
