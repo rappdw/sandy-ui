@@ -367,6 +367,18 @@ type FromHost =
     fail("split-mouse setup (non-fatal)", e);
   }
 
+  // ---- Keyboard focus -------------------------------------------------------
+  // VSCode focuses the webview IFRAME when the tab activates or the window
+  // regains OS focus — but keystrokes only reach the PTY when xterm's hidden
+  // helper textarea inside the iframe is focused. Without this forwarding,
+  // launch and Cmd+Tab-back both land on a focused iframe with an unfocused
+  // terminal, and the user needs one extra click before typing works.
+  // The iframe only receives this focus event when VSCode actually chose it,
+  // so forwarding never steals focus from the sidebar/editors.
+  window.addEventListener("focus", () => {
+    try { term.focus(); } catch { /* not fatal */ }
+  });
+
   // ---- Wire input + resize --------------------------------------------------
   term.onData((data: string) => post({ type: "input", data }));
 
@@ -485,5 +497,9 @@ type FromHost =
     lastCols = term.cols; lastRows = term.rows;
     log("posting ready", term.cols, "x", term.rows);
     post({ type: "ready", cols: term.cols, rows: term.rows });
+    // Initial focus: at panel creation VSCode may have focused the iframe
+    // BEFORE our window-focus listener existed — focus explicitly so typing
+    // works immediately after launch, no click required.
+    try { term.focus(); } catch { /* not fatal */ }
   }));
 })();
