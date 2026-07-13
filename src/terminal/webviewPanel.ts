@@ -15,6 +15,7 @@ type ToHost =
   | { type: "input"; data: string }
   | { type: "resize"; cols: number; rows: number }
   | { type: "osc";    event: OscEvent }
+  | { type: "openExternal"; uri: string }
   | { type: "log";    level: "info" | "error"; msg: string };
 
 type FromHost =
@@ -285,6 +286,20 @@ export async function openTerminalPanel(
         break;
       }
       case "osc":    handleOsc(panel, m.event); break;
+      case "openExternal": {
+        // From the web-links addon (click on a detected URL). Scheme guard is
+        // defense in depth: the addon's regex only matches http(s), but this
+        // is a message from webview-context code — keep the host strict.
+        let parsed: vscode.Uri | undefined;
+        try { parsed = vscode.Uri.parse(m.uri, /* strict */ true); } catch { /* fall through */ }
+        if (parsed && (parsed.scheme === "http" || parsed.scheme === "https")) {
+          log(`openExternal: ${m.uri}`);
+          void vscode.env.openExternal(parsed);
+        } else {
+          log(`openExternal REFUSED (non-http(s) scheme): ${m.uri}`);
+        }
+        break;
+      }
       case "log":    log(`[webview ${m.level}] ${m.msg}`); break;
     }
   });

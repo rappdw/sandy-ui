@@ -22,6 +22,7 @@ type ToHost =
   | { type: "input";  data: string }
   | { type: "resize"; cols: number; rows: number }
   | { type: "osc";    event: OscEvent }
+  | { type: "openExternal"; uri: string }
   | { type: "log";    level: "info" | "error"; msg: string };
 
 type FromHost =
@@ -161,8 +162,15 @@ type FromHost =
     });
     log("Terminal constructed");
     fit   = new FitAddon.FitAddon();
-    links = new WebLinksAddon.WebLinksAddon();
-    void links;  // loaded for side effect; reference to silence unused warning
+    // Explicit link handler: route through the host → vscode.env.openExternal.
+    // The addon's DEFAULT handler does `window.open()` with no URL and then
+    // sets location on the popup — a VSCode webview returns null for a
+    // URL-less window.open (nothing to intercept/forward), so links silently
+    // did nothing (console.warn only, invisible outside devtools).
+    links = new WebLinksAddon.WebLinksAddon((_event: MouseEvent, uri: string) => {
+      post({ type: "openExternal", uri });
+    });
+    void links;  // referenced to silence unused warning
     term.loadAddon(fit);
     term.loadAddon(links);
     const host = document.getElementById("terminal");
