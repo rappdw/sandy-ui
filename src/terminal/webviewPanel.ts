@@ -247,8 +247,17 @@ export async function openTerminalPanel(
           // caller (see its doc comment).
           startPty.onExit((code) => {
             if (code === 0) {
-              if (!supervisor.getSession(ws)) {
-                log(`daemon: --start exited 0 but session for ${ws} is gone (tab closed during start) — skipping attach spawn`);
+              // Tab closed (or explicitly detached) while --start ran:
+              // supervisor.detach() removed the daemon session from the map
+              // synchronously, so getSession() is authoritative here — skip
+              // the attach spawn entirely. Note --start's forked supervisor
+              // may well complete on the host; the session then shows up via
+              // --print-state discovery, which is exactly persistSessions
+              // semantics. Defense in depth: also honor detachRequested in
+              // case a future refactor makes removal async again.
+              const live = supervisor.getSession(ws);
+              if (!live || live.detachRequested) {
+                log(`daemon: --start exited 0 but local client was closed during start — skipping attach spawn (host session, if created, persists)`);
                 return;
               }
               log("daemon: --start exited 0, promoting to sandy --attach");

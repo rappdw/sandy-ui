@@ -253,10 +253,17 @@ export class PtySupervisor implements vscode.Disposable {
    * the panel-dispose handler should check session.panel and skip the kill
    * because it'll be undefined.
    *
-   * Daemon sessions additionally kill the attach pty after clearing the
-   * panel: that's the local client's own exit path (the host-side session
-   * is untouched), and its exit code 3 ("detached") is what
-   * promoteToAttach's exit wiring uses to remove the session from the map.
+   * Daemon sessions additionally kill the local client pty and LEAVE THE
+   * MAP immediately — "daemon detach = local client gone", uniformly for
+   * BOTH phases. During the --start phase there is no promoteToAttach exit
+   * wiring yet, so relying on pty exit codes for map removal would strand
+   * a zombie entry (dead pty, no panel) that a later launch would mistake
+   * for a re-attachable direct session (review batch-2 verify finding 1).
+   * The synchronous delete also makes the start-phase onExit guard in
+   * webviewPanel correct: after a tab-close detach, getSession() is
+   * already undefined by the time --start's exit callback fires.
+   * promoteToAttach's own exit wiring no-ops afterward via its
+   * sessions.has() guard, so the attach phase can't double-fire events.
    */
   detach(workspacePath: string): void {
     const session = this.sessions.get(workspacePath);
@@ -270,6 +277,9 @@ export class PtySupervisor implements vscode.Disposable {
       // some other failure — see the Session.detachRequested doc comment.
       session.detachRequested = true;
       try { session.pty.kill(); } catch { /* may already be dead */ }
+      this.sessions.delete(session.id);
+      this.log(`daemon client released workspace=${workspacePath} (session persists on host)`);
+      this._onDidChange.fire({ kind: "client-detached", session });
     }
   }
 
