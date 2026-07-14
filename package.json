@@ -2,7 +2,7 @@
   "name": "sandy-ui",
   "displayName": "Sandy UI",
   "description": "VSCode extension wrapping the sandy CLI — webview-hosted terminal, schema-driven settings, pre-flight approvals.",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "publisher": "rappdw",
   "private": true,
   "repository": {
@@ -38,6 +38,10 @@
         "command": "sandy.state.refresh",
         "title": "Sandy: Refresh State",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "sandy.pruneOrphans",
+        "title": "Sandy: Prune Orphaned Networks"
       },
       {
         "command": "sandy.statusbar.click",

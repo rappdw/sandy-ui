@@ -2,8 +2,8 @@ import * as vscode from "vscode";
 import * as path from "path";
 import * as os from "os";
 import { StatePoller, StateResolution } from "./state/poller";
-import { deriveBadge, SandboxBadge } from "./state/badge";
-import type { SandySandbox } from "./state/types";
+import { deriveBadge, daemonInfoFor, SandboxBadge, DaemonInfo } from "./state/badge";
+import type { SandySandbox, SandyRunningContainer } from "./state/types";
 import type { PtySupervisor } from "./terminal/supervisor";
 
 // Tree provider backed by `sandy --print-state` polling AND the
@@ -81,6 +81,16 @@ function buildNodes(r: StateResolution, supervisorWorkspaces: ReadonlySet<string
     ));
   }
 
+  if (typeof state.orphan_networks === "number" && state.orphan_networks > 0) {
+    const n = state.orphan_networks;
+    nodes.push(new StatusNode(
+      `⚠ ${n} orphaned sandy network${n === 1 ? "" : "s"}`,
+      "warning",
+      "Left behind by crashed/killed sessions. Click to run sandy --prune-orphans.",
+      { command: "sandy.pruneOrphans", title: "Prune Orphaned Networks" },
+    ));
+  }
+
   const sandboxes = state.sandboxes ?? [];
   if (sandboxes.length === 0) {
     nodes.push(new EmptyNode("No sandy sandboxes yet"));
@@ -88,7 +98,7 @@ function buildNodes(r: StateResolution, supervisorWorkspaces: ReadonlySet<string
     for (const s of sandboxes) {
       try {
         const badge = deriveBadge(s, state.running_containers, { supervisorRunningWorkspaces: supervisorWorkspaces });
-        nodes.push(new SandboxNode(s, badge));
+        nodes.push(new SandboxNode(s, badge, state.running_containers));
       } catch (e: any) {
         // One malformed sandbox entry shouldn't break the entire tree.
         nodes.push(new StatusNode(`⚠ skipped ${s?.name ?? "(unnamed)"}`, "warning",
@@ -100,15 +110,20 @@ function buildNodes(r: StateResolution, supervisorWorkspaces: ReadonlySet<string
 }
 
 class SandboxNode extends vscode.TreeItem {
-  constructor(public readonly sandbox: SandySandbox, public readonly badge: SandboxBadge) {
+  constructor(
+    public readonly sandbox: SandySandbox,
+    public readonly badge: SandboxBadge,
+    runningContainers: SandyRunningContainer[] | null = null,
+  ) {
     // Sandy MAY omit workspace_path on orphan/legacy sandboxes — fall back to
     // sandbox.path or sandbox.name so the tree can still render. Don't crash
     // on a single malformed entry.
     const labelSource = sandbox.workspace_path || sandbox.path || sandbox.name || "(unknown sandbox)";
     super(abbreviatePath(labelSource), vscode.TreeItemCollapsibleState.None);
+    const daemonInfo = daemonInfoFor(sandbox.name, runningContainers);
     this.iconPath = iconForBadge(badge);
-    this.description = describe(sandbox, badge);
-    this.tooltip = tooltipFor(sandbox, badge);
+    this.description = describe(sandbox, badge, daemonInfo);
+    this.tooltip = tooltipFor(sandbox, badge, daemonInfo);
     this.contextValue = `sandbox.${badge}`;
     // Only attach the launch command when we have an actual workspace path —
     // launching against a missing/null path would just open the folder picker.
@@ -133,11 +148,12 @@ class SandboxNode extends vscode.TreeItem {
 }
 
 class StatusNode extends vscode.TreeItem {
-  constructor(label: string, kind: "warning" | "loading", tooltip: string) {
+  constructor(label: string, kind: "warning" | "loading", tooltip: string, command?: vscode.Command) {
     super(label, vscode.TreeItemCollapsibleState.None);
     this.iconPath = new vscode.ThemeIcon(kind === "warning" ? "warning" : "loading~spin");
     this.tooltip = tooltip;
     this.contextValue = `status.${kind}`;
+    if (command) this.command = command;
   }
 }
 
@@ -167,14 +183,19 @@ function iconForBadge(badge: SandboxBadge): vscode.ThemeIcon {
   }
 }
 
-function describe(s: SandySandbox, badge: SandboxBadge): string {
+function describe(s: SandySandbox, badge: SandboxBadge, daemonInfo?: DaemonInfo): string {
   const parts: string[] = [];
   if (s.agent) parts.push(s.agent);
   parts.push(badge);
-  return parts.join(" · ");
+  const base = parts.join(" · ");
+  if (!daemonInfo) return base;
+  const clients = daemonInfo.attachedClients != null
+    ? ` (${daemonInfo.attachedClients} client${daemonInfo.attachedClients === 1 ? "" : "s"})`
+    : "";
+  return `${base} · persisted${clients}`;
 }
 
-function tooltipFor(s: SandySandbox, badge: SandboxBadge): string {
+function tooltipFor(s: SandySandbox, badge: SandboxBadge, daemonInfo?: DaemonInfo): string {
   const lines = [
     `Workspace: ${s.workspace_path ?? "(unknown — sandbox has no workspace_path)"}`,
     `Sandbox:   ${s.name}`,
@@ -184,5 +205,9 @@ function tooltipFor(s: SandySandbox, badge: SandboxBadge): string {
   if (s.last_used_at)       lines.push(`Last used: ${s.last_used_at}`);
   if (s.created_version)    lines.push(`Created with sandy ${s.created_version}`);
   if (s.compat_warning)     lines.push(`⚠ ${s.compat_warning}`);
+  if (daemonInfo) {
+    lines.push(`Daemon:    persisted session — survives VSCode restarts`);
+    if (daemonInfo.attachedClients != null) lines.push(`Clients:   ${daemonInfo.attachedClients} attached`);
+  }
   return lines.join("\n");
 }

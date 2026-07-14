@@ -1,7 +1,6 @@
 import * as cp from "child_process";
 import * as vscode from "vscode";
 import type { SandyState } from "./types";
-import { enrichWithWorkspaceJson } from "./enrich";
 import { resolveSandyBinary } from "./sandyPath";
 
 // Polls `sandy --print-state` on a fixed cadence; emits change events when
@@ -94,10 +93,6 @@ export class StatePoller implements vscode.Disposable {
         }
         try {
           const state = JSON.parse(stdout) as SandyState;
-          // Bridge until sandy --print-state surfaces workspace_path itself
-          // (rappdw/sandy#19). Reads each sandbox's WORKSPACE.json to
-          // recover the field.
-          enrichWithWorkspaceJson(state);
           resolve({ state, fetched_at });
         } catch (e: any) {
           const msg = `parse failed: ${e?.message ?? e}`;

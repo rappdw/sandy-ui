@@ -7,10 +7,9 @@ import type { SandyMeta } from "../schema/types";
 export interface SandySandbox {
   name: string;
   path: string;
-  // Absent until sandy emits it natively (rappdw/sandy#19); today it's
-  // best-effort recovered from WORKSPACE.json by state/enrich.ts and can
-  // legitimately stay undefined for orphan/legacy sandboxes. Typing it
-  // required was a lie the tree/badge code already defended against.
+  // Emitted natively by sandy >= 1.0 (rappdw/sandy#19); may be absent on
+  // orphan/legacy sandboxes. Typing it required was a lie the tree/badge
+  // code already defended against.
   workspace_path?: string;
   created_version?: string;
   last_used_version?: string;

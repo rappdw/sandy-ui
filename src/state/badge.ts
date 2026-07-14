@@ -54,6 +54,18 @@ export function deriveBadge(
   return "current";
 }
 
+export interface DaemonInfo { attachedClients: number | null }
+
+/** The daemon container for a sandbox, or undefined when none / not daemon. */
+export function daemonInfoFor(
+  sandboxName: string,
+  runningContainers: SandyRunningContainer[] | null,
+): DaemonInfo | undefined {
+  const c = runningContainers?.find(c => c.sandbox === sandboxName && c.daemon === true);
+  if (!c) return undefined;
+  return { attachedClients: c.attached_clients ?? null };
+}
+
 function parseIsoDate(s: string): Date | null {
   const d = new Date(s);
   return isNaN(d.getTime()) ? null : d;

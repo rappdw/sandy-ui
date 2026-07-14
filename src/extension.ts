@@ -10,8 +10,10 @@ import { ProjectsTreeProvider } from "./projectsTree";
 import { StatePoller } from "./state/poller";
 import { pollCadence } from "./state/cadence";
 import { deleteSandboxDir, removeLockForSandbox, lockPathForSandbox } from "./state/deleteSandbox";
-import { invalidateSandyPathCache } from "./state/sandyPath";
-import { PtySupervisor } from "./terminal/supervisor";
+import { invalidateSandyPathCache, resolveSandyBinary } from "./state/sandyPath";
+import { daemonInfoFor } from "./state/badge";
+import { pruneOrphansArgs, stopArgs, STOP_EXIT } from "./daemon/contract";
+import { PtySupervisor, Session } from "./terminal/supervisor";
 import { runSynthkitCommand } from "./synthkit/commands";
 
 // Module-level so deactivate() can reach the supervisor (deactivate doesn't
@@ -48,16 +50,37 @@ export function activate(ctx: vscode.ExtensionContext) {
   // the left side is conventionally for editor/file context.
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBar.command = "sandy.statusbar.click";
+  // Daemon-aware: a persisted session (host-side sandy daemon, no local
+  // client) has no supervisor entry at all — supervisor.detach() drops
+  // daemon sessions from its map synchronously (see PtySupervisor.detach's
+  // daemon branch), so "persisted" means "poller reports a daemon container
+  // whose workspace the supervisor doesn't know about". Counted alongside
+  // local sessions so the bar shows even when every daemon session's client
+  // has gone away — the old "hide when supervisor is empty" behavior would
+  // otherwise hide a bar that should say "1 sandy, persisted".
   const refreshStatusBar = () => {
     if (!supervisor) return;
     const sessions = supervisor.getAllSessions();
-    if (sessions.length === 0) { statusBar.hide(); return; }
     const detachedCount = sessions.filter(s => !s.panel).length;
-    statusBar.text = `$(server-process) ${sessions.length} sandy`
-      + (detachedCount > 0 ? ` ($(eye-closed) ${detachedCount} detached)` : "");
-    statusBar.tooltip = sessions
-      .map(s => `${s.workspacePath}  •  ${s.panel ? "attached" : "detached"}  •  pid=${s.pty.pid}`)
-      .join("\n");
+    const supervisorWorkspaces = new Set(sessions.map(s => s.workspacePath));
+    const state = poller.current().state;
+    const persisted = (state?.running_containers ?? [])
+      .filter(c => c.daemon === true)
+      .map(c => ({ c, ws: state?.sandboxes.find(sb => sb.name === c.sandbox)?.workspace_path }))
+      .filter((x): x is { c: typeof x.c; ws: string } => !!x.ws && !supervisorWorkspaces.has(x.ws));
+
+    const total = sessions.length + persisted.length;
+    if (total === 0) { statusBar.hide(); return; }
+    // One combined "detached" count (direct-backend detached + persisted
+    // daemon sessions) — keeps the label simple rather than juggling two
+    // suffixes for what's the same "not attached right now" concept.
+    const detachedTotal = detachedCount + persisted.length;
+    statusBar.text = `$(server-process) ${total} sandy`
+      + (detachedTotal > 0 ? ` ($(eye-closed) ${detachedTotal} detached)` : "");
+    statusBar.tooltip = [
+      ...sessions.map(s => `${s.workspacePath}  •  ${s.panel ? "attached" : "detached"}  •  pid=${s.pty.pid}`),
+      ...persisted.map(({ ws, c }) => `${ws}  •  persisted  •  ${c.attached_clients ?? "?"} client(s)`),
+    ].join("\n");
     statusBar.show();
   };
   refreshStatusBar();
@@ -75,6 +98,10 @@ export function activate(ctx: vscode.ExtensionContext) {
     stateOut,
     statusBar,
     supervisor.onDidChange(refreshStatusBar),
+    // Persisted daemon sessions live in poller state, not the supervisor —
+    // the bar needs to react to poll results too, not just local spawn/
+    // attach/detach/exit events.
+    poller.onDidChange(refreshStatusBar),
     // If the user updates sandy.binaryPath at runtime, invalidate the
     // resolver cache and trigger a state refresh so the new value is used.
     vscode.workspace.onDidChangeConfiguration(e => {
@@ -95,34 +122,77 @@ export function activate(ctx: vscode.ExtensionContext) {
     vscode.commands.registerCommand("sandy.settings.open", () => openSettingsPanel(ctx)),
     vscode.commands.registerCommand("sandy.state.refresh", () => poller.refresh()),
 
+    // Prune orphaned sandy_* networks (rappdw/sandy#20). Reachable from the
+    // palette and from the tree's "N orphaned sandy networks" status node.
+    vscode.commands.registerCommand("sandy.pruneOrphans", () => {
+      const sandyBin = resolveSandyBinary();
+      if (!sandyBin) {
+        vscode.window.showWarningMessage("Sandy: sandy binary not found — can't prune orphaned networks.");
+        return;
+      }
+      cp.execFile(sandyBin, pruneOrphansArgs(), { timeout: 30_000 }, (err: any) => {
+        if (!err) {
+          vscode.window.setStatusBarMessage("Sandy: orphaned networks pruned", 5_000);
+          void poller.refresh();
+          return;
+        }
+        // Contract: exit 1 = docker unreachable.
+        vscode.window.showErrorMessage(`Sandy: prune orphaned networks failed (exit ${err.code ?? "?"})`);
+      });
+    }),
+
     // Status bar click: quick-pick to switch between live sandy sessions.
     // Selecting a session reveals its panel if attached, or invokes launch
     // (which re-attaches a new panel to the live PTY) if detached.
     vscode.commands.registerCommand("sandy.statusbar.click", async () => {
       if (!supervisor) return;
       const sessions = supervisor.getAllSessions();
-      if (sessions.length === 0) {
+      const supervisorWorkspaces = new Set(sessions.map(s => s.workspacePath));
+      const state = poller.current().state;
+      const persisted = (state?.running_containers ?? [])
+        .filter(c => c.daemon === true)
+        .map(c => ({ c, ws: state?.sandboxes.find(sb => sb.name === c.sandbox)?.workspace_path }))
+        .filter((x): x is { c: typeof x.c; ws: string } => !!x.ws && !supervisorWorkspaces.has(x.ws));
+
+      if (sessions.length === 0 && persisted.length === 0) {
         vscode.window.showInformationMessage("Sandy: no live sessions.");
         return;
       }
-      const items = sessions.map(s => ({
+
+      interface QuickPickSessionItem extends vscode.QuickPickItem {
+        workspacePath: string;
+        session?: Session;
+      }
+      const localItems: QuickPickSessionItem[] = sessions.map(s => ({
         label: `$(${s.panel ? "terminal" : "eye-closed"}) ${path.basename(s.workspacePath)}`,
         description: s.workspacePath,
         detail: s.panel ? `attached  •  pid=${s.pty.pid}` : `detached  •  pid=${s.pty.pid}  •  click to re-attach`,
+        workspacePath: s.workspacePath,
         session: s,
       }));
+      // Persisted daemon sessions have no local session object — picking
+      // one goes straight through sandy.launch, which resolves to the
+      // daemon path's --start (idempotent no-op) + --attach.
+      const persistedItems: QuickPickSessionItem[] = persisted.map(({ ws, c }) => ({
+        label: `$(eye-closed) ${path.basename(ws)}`,
+        description: ws,
+        detail: `persisted  •  ${c.attached_clients ?? "?"} client(s)  •  click to attach`,
+        workspacePath: ws,
+      }));
+      const items = [...localItems, ...persistedItems];
+
       const picked = await vscode.window.showQuickPick(items, {
-        placeHolder: `${sessions.length} live sandy session${sessions.length === 1 ? "" : "s"} — pick to switch / re-attach`,
+        placeHolder: `${items.length} live sandy session${items.length === 1 ? "" : "s"} — pick to switch / re-attach`,
       });
       if (!picked) return;
-      const target = picked.session;
-      if (target.panel) {
-        target.panel.reveal(target.panel.viewColumn ?? vscode.ViewColumn.Active, /* preserveFocus */ false);
+      if (picked.session?.panel) {
+        picked.session.panel.reveal(picked.session.panel.viewColumn ?? vscode.ViewColumn.Active, /* preserveFocus */ false);
       } else {
-        // Detached — re-attach by invoking the normal launch flow with the
-        // workspace override; openTerminalPanel detects the existing
-        // session and rebinds.
-        await vscode.commands.executeCommand("sandy.launch", { workspacePath: target.workspacePath });
+        // Detached (or persisted) — re-attach by invoking the normal launch
+        // flow with the workspace override; openTerminalPanel detects the
+        // existing session (direct) or the daemon path (persisted) and
+        // rebinds.
+        await vscode.commands.executeCommand("sandy.launch", { workspacePath: picked.workspacePath });
       }
     }),
 
@@ -176,7 +246,36 @@ export function activate(ctx: vscode.ExtensionContext) {
       if (!ws || !supervisor) return;
       const session = supervisor.getSession(ws);
       if (!session) {
-        vscode.window.showInformationMessage(`Sandy: no live session for ${ws}.`);
+        // No local session — but a persisted daemon session (no local
+        // client) can still be live on the host. Fall back to
+        // `sandy --stop` directly rather than reporting "no live session"
+        // for a session that's very much alive.
+        const daemonInfo = daemonInfoFor(node?.sandbox?.name, poller.current().state?.running_containers ?? null);
+        if (!daemonInfo) {
+          vscode.window.showInformationMessage(`Sandy: no live session for ${ws}.`);
+          return;
+        }
+        const sandyBin = resolveSandyBinary();
+        if (!sandyBin) {
+          vscode.window.showWarningMessage("Sandy: sandy binary not found — can't stop the daemon session.");
+          return;
+        }
+        await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: "Stopping sandy (daemon)…" },
+          () => new Promise<void>((resolve) => {
+            cp.execFile(sandyBin, stopArgs(ws), { timeout: 60_000 }, (err: any) => {
+              if (!err) {
+                vscode.window.setStatusBarMessage(`Sandy: stopped ${ws}`, 5_000);
+              } else if (err.code === STOP_EXIT.NO_SESSION) {
+                vscode.window.showInformationMessage(`Sandy: no such daemon session for ${ws}.`);
+              } else {
+                vscode.window.showErrorMessage(`Sandy: stop failed for ${ws} (exit ${err.code ?? "?"})`);
+              }
+              void poller.refresh();
+              resolve();
+            });
+          }),
+        );
         return;
       }
       vscode.window.setStatusBarMessage(`Sandy: stopping ${ws}…`, 5_000);

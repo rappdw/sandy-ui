@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { deriveBadge, SandboxBadge } from "../src/state/badge";
+import { deriveBadge, daemonInfoFor, SandboxBadge } from "../src/state/badge";
 import type { SandySandbox, SandyRunningContainer } from "../src/state/types";
 
 const NOW = new Date("2026-04-27T12:00:00Z");
@@ -118,5 +118,64 @@ describe("deriveBadge", () => {
       const s = sb({});  // no created_at, no last_used_at, no lock
       expect(deriveBadge(s, [], { now: NOW })).toBe("current");
     });
+  });
+});
+
+describe("daemonInfoFor", () => {
+  it("returns attachedClients when daemon=true and attached_clients is a positive number", () => {
+    const containers: SandyRunningContainer[] = [
+      { id: "1", sandbox: "myproj-abc12345", daemon: true, attached_clients: 2 },
+    ];
+    expect(daemonInfoFor("myproj-abc12345", containers)).toEqual({ attachedClients: 2 });
+  });
+
+  it("returns attachedClients: 0 when daemon=true and attached_clients is 0", () => {
+    const containers: SandyRunningContainer[] = [
+      { id: "1", sandbox: "myproj-abc12345", daemon: true, attached_clients: 0 },
+    ];
+    expect(daemonInfoFor("myproj-abc12345", containers)).toEqual({ attachedClients: 0 });
+  });
+
+  it("returns attachedClients: null when attached_clients is explicitly null", () => {
+    const containers: SandyRunningContainer[] = [
+      { id: "1", sandbox: "myproj-abc12345", daemon: true, attached_clients: null },
+    ];
+    expect(daemonInfoFor("myproj-abc12345", containers)).toEqual({ attachedClients: null });
+  });
+
+  it("returns attachedClients: null when attached_clients is absent", () => {
+    const containers: SandyRunningContainer[] = [
+      { id: "1", sandbox: "myproj-abc12345", daemon: true },
+    ];
+    expect(daemonInfoFor("myproj-abc12345", containers)).toEqual({ attachedClients: null });
+  });
+
+  it("returns undefined when daemon is false", () => {
+    const containers: SandyRunningContainer[] = [
+      { id: "1", sandbox: "myproj-abc12345", daemon: false, attached_clients: 3 },
+    ];
+    expect(daemonInfoFor("myproj-abc12345", containers)).toBeUndefined();
+  });
+
+  it("returns undefined when daemon is absent (pre-1.1.0 sandy)", () => {
+    const containers: SandyRunningContainer[] = [
+      { id: "1", sandbox: "myproj-abc12345", attached_clients: 3 },
+    ];
+    expect(daemonInfoFor("myproj-abc12345", containers)).toBeUndefined();
+  });
+
+  it("returns undefined when no container matches the sandbox name", () => {
+    const containers: SandyRunningContainer[] = [
+      { id: "1", sandbox: "other-sandbox", daemon: true, attached_clients: 1 },
+    ];
+    expect(daemonInfoFor("myproj-abc12345", containers)).toBeUndefined();
+  });
+
+  it("returns undefined when runningContainers is null (docker unreachable)", () => {
+    expect(daemonInfoFor("myproj-abc12345", null)).toBeUndefined();
+  });
+
+  it("returns undefined when runningContainers is empty", () => {
+    expect(daemonInfoFor("myproj-abc12345", [])).toBeUndefined();
   });
 });
