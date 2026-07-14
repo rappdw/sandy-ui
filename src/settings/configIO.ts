@@ -19,6 +19,9 @@ export interface Schema {
   schema_version: number;
   sandy_version:  string;
   fields:         FieldDef[];
+  // Additive; the settings webview ignores it. Populated by
+  // schema/parse.ts from cli_flags presence — see src/daemon/contract.ts.
+  capabilities?: { daemonMode: boolean };
 }
 
 export type Scope = "home" | "workspace";

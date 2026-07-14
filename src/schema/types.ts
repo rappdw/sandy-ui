@@ -42,11 +42,15 @@ export interface SandyCompatibility {
   deprecated_schema_versions?: number[];
 }
 
+// sandy emits cli_flags as objects with a `name` field (e.g. {name: "--start"});
+// tolerate bare strings defensively since the spec doesn't pin the exact shape.
+export interface SandyCliFlag { name?: string; [k: string]: unknown }
+
 export interface SandySchema {
   schema_version: number;
   sandy: SandyMeta;
   config: SandyConfigSection;
-  cli_flags?: unknown[];      // not consumed by the extension yet
+  cli_flags?: Array<SandyCliFlag | string>;  // feature-detect daemon support ("--start" presence)
   agents?: SandyAgent[];
   protected_paths?: unknown;  // ditto
   skill_packs?: unknown[];    // ditto

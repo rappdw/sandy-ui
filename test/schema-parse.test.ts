@@ -133,6 +133,27 @@ describe("parseSandySchema — env_only_keys are skipped", () => {
   });
 });
 
+describe("parseSandySchema — capabilities.daemonMode (feature-detect via cli_flags)", () => {
+  it("cli_flags containing {name:'--start'} → daemonMode true", () => {
+    const sandy: SandySchema = { ...minimal, cli_flags: [{ name: "--attach" }, { name: "--start" }] };
+    expect(parseSandySchema(sandy).capabilities).toEqual({ daemonMode: true });
+  });
+
+  it("absent cli_flags → daemonMode false", () => {
+    expect(parseSandySchema(minimal).capabilities).toEqual({ daemonMode: false });
+  });
+
+  it("cli_flags present but without --start → daemonMode false", () => {
+    const sandy: SandySchema = { ...minimal, cli_flags: [{ name: "--print-state" }, { name: "--print-schema" }] };
+    expect(parseSandySchema(sandy).capabilities).toEqual({ daemonMode: false });
+  });
+
+  it("bare-string '--start' entry → daemonMode true", () => {
+    const sandy: SandySchema = { ...minimal, cli_flags: ["--print-state", "--start"] };
+    expect(parseSandySchema(sandy).capabilities).toEqual({ daemonMode: true });
+  });
+});
+
 describe("parseSandySchema — multi-tier flat output ordering", () => {
   it("emits privileged keys first, then passive (preserves array order within each)", () => {
     const sandy: SandySchema = {

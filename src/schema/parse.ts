@@ -13,7 +13,12 @@
 // the settings form has nothing useful to render for them.
 
 import type { Schema, FieldDef } from "../settings/configIO";
-import type { SandySchema, SandyConfigKey } from "./types";
+import type { SandySchema, SandyConfigKey, SandyCliFlag } from "./types";
+
+// sandy-ui feature-detects daemon support on flag presence, per the frozen
+// contract on rappdw/sandy-ui#12 — never on version-string parsing.
+const flagName = (f: SandyCliFlag | string): string | undefined =>
+  typeof f === "string" ? f : f?.name;
 
 export function parseSandySchema(sandy: SandySchema): Schema {
   const fields: FieldDef[] = [];
@@ -30,10 +35,13 @@ export function parseSandySchema(sandy: SandySchema): Schema {
   }
   // env_only_keys: deliberately skipped — not file-configurable.
 
+  const daemonMode = (sandy.cli_flags ?? []).some(f => flagName(f) === "--start");
+
   return {
     schema_version: sandy.schema_version,
     sandy_version:  sandy.sandy?.version ?? "unknown",
     fields,
+    capabilities: { daemonMode },
   };
 }
 

@@ -36,6 +36,10 @@ export interface SandyRunningContainer {
   sandbox: string;
   started_at?: string;
   agent?: string;
+  // sandy 1.1.0+ daemon-mode additions (rappdw/sandy-ui#12 frozen contract).
+  // Absent on pre-1.1.0 sandy — feature-detect, don't assume.
+  daemon?: boolean;               // true = attachable sandy daemon session
+  attached_clients?: number | null;  // live tmux client count; null for non-daemon
 }
 
 export interface SandyState {
@@ -47,4 +51,6 @@ export interface SandyState {
   approvals: SandyApproval[];
   running_containers: SandyRunningContainer[] | null;  // null when docker_reachable=false
   docker_reachable?: boolean;
+  // sandy 1.1.0+: orphaned sandy_* networks, or null when Docker unreachable.
+  orphan_networks?: number | null;
 }

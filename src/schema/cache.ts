@@ -9,6 +9,7 @@ import { resolveSandyBinary } from "../state/sandyPath";
 // Cache file lives in the extension's globalStorageUri.
 // Layout:
 //   {
+//     "cache_format":  2,
 //     "sandy_version": "0.12.0",
 //     "fetched_at":    "2026-04-27T...",
 //     "raw":           <SandySchema>,
@@ -16,7 +17,16 @@ import { resolveSandyBinary } from "../state/sandyPath";
 //   }
 // Keyed by sandy_version — when sandy upgrades, the cache invalidates.
 
+// Bumped whenever parseSandySchema's *output shape* changes (not just when
+// sandy's version changes): a cache written by a pre-0.6.0 sandy-ui for a
+// still-current sandy_version would otherwise match the version check but
+// carry a `parsed` blob missing fields like `capabilities` forever, since
+// nothing would ever invalidate it. Missing cache_format counts as a
+// mismatch (pre-format-versioning caches never had the field).
+const CACHE_FORMAT = 2;
+
 interface CacheFile {
+  cache_format: number;
   sandy_version: string;
   fetched_at: string;
   raw: SandySchema;
@@ -83,6 +93,7 @@ export async function refreshSchema(globalStorageDir: string, fallbackMock: Sche
   try {
     fs.mkdirSync(globalStorageDir, { recursive: true });
     const cache: CacheFile = {
+      cache_format: CACHE_FORMAT,
       sandy_version: version,
       fetched_at: new Date().toISOString(),
       raw,
@@ -130,6 +141,11 @@ async function invokeSandyPrintSchema(): Promise<SandySchema> {
 function tryReadCache(cachePath: string): CacheFile | undefined {
   try {
     if (!fs.existsSync(cachePath)) return undefined;
-    return JSON.parse(fs.readFileSync(cachePath, "utf8")) as CacheFile;
+    const cache = JSON.parse(fs.readFileSync(cachePath, "utf8")) as CacheFile;
+    // cache_format mismatch (including missing — pre-format-versioning
+    // caches never had the field) means the parsed shape can't be trusted;
+    // treat it the same as a miss so refreshSchema regenerates it.
+    if (cache.cache_format !== CACHE_FORMAT) return undefined;
+    return cache;
   } catch { return undefined; }
 }
