@@ -2,7 +2,7 @@
 
 VSCode extension that wraps the [sandy](https://github.com/rappdw/sandy) CLI — runs sandy as a webview-hosted terminal in the editor area, with schema-driven settings and pre-flight approval modals.
 
-> **Status**: 0.6.0, dogfooding for the author. Not yet on Marketplace / OpenVSX. Public distribution is gated on macOS TCC mitigation and node-pty packaging — see [SPEC_SANDY_UI.md](SPEC_SANDY_UI.md) and [docs/SPIKE_RESULTS.md](docs/SPIKE_RESULTS.md) for the production roadmap.
+> **Status**: 0.6.0, dogfooding for the author. Not yet on Marketplace / OpenVSX. Public distribution is gated on node-pty packaging (macOS TCC was reassessed down from blocker to onboarding note) — see [SPEC_SANDY_UI.md](SPEC_SANDY_UI.md) and [docs/SPIKE_RESULTS.md](docs/SPIKE_RESULTS.md) for the production roadmap.
 
 ## What it gives you
 
