@@ -1,10 +1,17 @@
 import * as vscode from "vscode";
-import { launchCandidates, buildCleanEnv } from "./pty";
+import { launchCandidates, buildCleanEnv, spawnPty } from "./pty";
 import { OscEvent } from "./oscHandler";
 import { sweepStaleLocks, readLockPid, isPidAlive } from "./sandyState";
 import * as fs from "fs";
 import { checkPreflightApproval } from "../approval/preflight";
 import { PtySupervisor, Session } from "./supervisor";
+// Daemon-mode eligibility (sandy-ui#12 batch 2): same schema-cache pattern
+// settings/webviewPanel.ts uses to source the mock fallback.
+import schemaMock from "../mocks/schema.json";
+import { getCachedSchema } from "../schema/cache";
+import { hasDaemonCapability, startArgs, attachArgs } from "../daemon/contract";
+import { resolveSandyBinary } from "../state/sandyPath";
+import { Schema } from "../settings/configIO";
 
 const out = vscode.window.createOutputChannel("Sandy");
 const log = (msg: string) => out.appendLine(`[${new Date().toISOString()}] ${msg}`);
@@ -82,6 +89,17 @@ export async function openTerminalPanel(
     log(`re-attaching to existing session for workspace=${ws}`);
   }
 
+  // Daemon eligibility (sandy-ui#12 batch 2), computed once per call, up
+  // front alongside preflight since the capability check is async but
+  // cheap (cache-hit path). `sandy.persistSessions` gates it off entirely
+  // (legacy lifecycle); a missing/unresolvable sandy binary also falls
+  // back to legacy — there's nothing to run --start/--attach with.
+  const persist = vscode.workspace.getConfiguration("sandy").get<boolean>("persistSessions", true);
+  const daemonCapable = persist && hasDaemonCapability((await getCachedSchema(ctx.globalStorageUri.fsPath, schemaMock as Schema)).schema);
+  const sandyBin = daemonCapable ? resolveSandyBinary() : undefined;
+  const useDaemon = daemonCapable && !!sandyBin;   // no resolvable binary → legacy path
+  log(`launch mode: ${useDaemon ? "daemon" : "legacy"} (persistSessions=${persist}, daemonCapable=${daemonCapable}, sandyBin=${sandyBin ?? "n/a"})`);
+
   // Maximize editor space for the sandy session if the user has opted in
   // (defaults: bottom panel + auxiliary bar closed; primary sidebar kept).
   // Each command is fire-and-forget — we don't await, don't fail launch
@@ -115,6 +133,15 @@ export async function openTerminalPanel(
   // existing live PTY, or we spawn a new one inside the "ready" handler
   // once we know the webview's measured cols/rows.
   let session: Session | undefined;
+
+  // Latest requested terminal dimensions, tracked at panel scope so the
+  // daemon path's phase-2 attach spawn (after `sandy --start` exits, which
+  // can be long — image build / seeding) sizes its pty to whatever the
+  // user has resized to since "ready", not a stale ready-time snapshot.
+  // Initialized from "ready", updated by the "resize" case below (only for
+  // resizes that pass the existing suppression checks).
+  let lastCols = 80;
+  let lastRows = 24;
 
   // Push the wheel-scroll sensitivity to the webview, now and whenever the
   // setting changes — so users can tune scroll speed live without reloading.
@@ -165,6 +192,86 @@ export async function openTerminalPanel(
               }, 60);
             }, 80);
           } catch (e: any) { log(`re-attach resize failed: ${e?.message ?? e}`); }
+          break;
+        }
+
+        // isReattach only fires when the supervisor already holds a live
+        // session for this workspace with panel === undefined — i.e. an
+        // in-window detach (B6's reveal-existing-panel guard upstream
+        // handles the "still attached" case by revealing instead of
+        // getting here at all). A daemon session's in-window detach
+        // removes it from the supervisor's map entirely (see
+        // PtySupervisor.detach's daemon branch), so a re-launch after
+        // detaching a daemon session never hits isReattach — it falls
+        // through to the useDaemon branch below, where `--start` no-ops
+        // (exit 0, instant, idempotent per the frozen contract) and goes
+        // straight to a fresh attach. Direct-backend in-window detach is
+        // the only path that still lands in isReattach above. Uniform
+        // either way from the user's perspective.
+
+        if (useDaemon) {
+          // Daemon fresh-spawn path (sandy-ui#12 batch 2). Stale-lock
+          // sweep still runs (dead-PID cleanup is still wanted), but the
+          // orphan-lock modal is a legacy-only concept: under daemon mode
+          // a live lock is the EXPECTED state (the daemon holds it across
+          // VSCode sessions), and a genuine bare-CLI conflict makes
+          // `--start` itself fail with an informative error that streams
+          // live into the visible terminal — no need to pre-empt it with
+          // a modal. We just log live locks instead of prompting.
+          try {
+            const sweep = sweepStaleLocks(ws);
+            if (sweep.cleaned.length) log(`cleaned ${sweep.cleaned.length} stale lock(s): ${sweep.cleaned.join(", ")}`);
+            if (sweep.alive.length)   log(`live lock(s) detected (daemon mode — expected, no prompt): ${sweep.alive.join(", ")}`);
+            if (sweep.unknown.length) log(`unparseable lock(s) left alone: ${sweep.unknown.join(", ")}`);
+          } catch (e: any) {
+            log(`lock sweep failed (continuing): ${e?.message ?? e}`);
+          }
+
+          const env = buildCleanEnv(approveEnv);
+          log(`PATH: ${env.PATH}`);
+          lastCols = m.cols || 80;
+          lastRows = m.rows || 24;
+
+          log(`daemon: sandy --start workspace=${ws}`);
+          const startPty = spawnPty({
+            command: sandyBin!, args: startArgs(ws),
+            cwd: ws, env,
+            cols: lastCols, rows: lastRows,
+          });
+          session = supervisor.beginDaemon(ws, startPty);
+          supervisor.attach(ws, panel);
+          panel.title = "Sandy (starting…)";
+
+          // Policy for what --start's exit means lives HERE, not in the
+          // supervisor: beginDaemon() deliberately leaves it to the
+          // caller (see its doc comment).
+          startPty.onExit((code) => {
+            if (code === 0) {
+              if (!supervisor.getSession(ws)) {
+                log(`daemon: --start exited 0 but session for ${ws} is gone (tab closed during start) — skipping attach spawn`);
+                return;
+              }
+              log("daemon: --start exited 0, promoting to sandy --attach");
+              try {
+                const attachPty = spawnPty({
+                  command: sandyBin!, args: attachArgs(ws),
+                  cwd: ws, env,
+                  cols: lastCols, rows: lastRows,
+                });
+                supervisor.promoteToAttach(ws, attachPty);
+                panel.title = `Sandy (attached pid=${attachPty.pid})`;
+                log(`daemon: attached pid=${attachPty.pid}`);
+              } catch (e: any) {
+                log(`daemon: --attach spawn failed: ${e?.message ?? e}`);
+                supervisor.abortDaemonStart(ws, -1);
+                vscode.window.showErrorMessage(`Sandy: failed to attach after --start (${e?.message ?? e})`);
+              }
+            } else {
+              log(`daemon: --start failed exit=${code}`);
+              supervisor.abortDaemonStart(ws, code);
+              vscode.window.showErrorMessage(`Sandy: sandy --start failed (exit ${code}) — see terminal output`);
+            }
+          });
           break;
         }
 
@@ -282,6 +389,8 @@ export async function openTerminalPanel(
           break;
         }
         log(`resize ${m.cols}x${m.rows}`);
+        lastCols = m.cols;
+        lastRows = m.rows;
         session?.pty.resize(m.cols, m.rows);
         break;
       }
@@ -326,6 +435,16 @@ export async function openTerminalPanel(
     // close (another panel took over) — don't kill.
     if (session.panel !== panel) {
       log(`tab disposed but session is detached/reassigned for ${ws} — leaving PTY alive`);
+      return;
+    }
+    if (session.backend === "daemon") {
+      // Daemon sessions survive the tab close by design — the host-side
+      // session is durable; the local attach client is the only thing
+      // going away. detach() sets detachRequested BEFORE killing that
+      // client, so the supervisor's exit wiring treats it as a clean
+      // detach rather than a session death.
+      log("tab closed — detached daemon client (session persists; use Stop to tear down)");
+      supervisor.detach(ws);
       return;
     }
     log(`tab closed, stopping session for workspace=${ws}`);

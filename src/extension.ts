@@ -156,7 +156,11 @@ export function activate(ctx: vscode.ExtensionContext) {
       if (!ws || !supervisor) return;
       const session = supervisor.getSession(ws);
       if (!session) {
-        vscode.window.showInformationMessage(`Sandy: no live session for ${ws} — nothing to detach.`);
+        // Covers both "never launched" and daemon sessions whose local
+        // client already went away (tab close / detach) — the supervisor
+        // only tracks local clients for daemon sessions, so "no session
+        // here" doesn't mean the host-side sandy session is gone.
+        vscode.window.showInformationMessage(`Sandy: nothing to detach for ${ws} — daemon sessions without a client are already detached; launch to re-attach.`);
         return;
       }
       const panel = session.panel;

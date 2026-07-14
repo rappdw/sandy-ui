@@ -65,7 +65,7 @@
       },
       {
         "command": "sandy.tree.detach",
-        "title": "Detach (this VSCode session)"
+        "title": "Detach"
       },
       {
         "command": "sandy.tree.stop",
@@ -250,6 +250,11 @@
           "minimum": 0.1,
           "maximum": 10,
           "description": "Mouse-wheel / trackpad scroll speed in the Sandy terminal. Higher scrolls faster, lower gives finer control. Applies live — no reload needed."
+        },
+        "sandy.persistSessions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use sandy's daemon mode (sandy >= 1.1.0) so sessions survive VSCode restarts: closing a tab or quitting VSCode detaches instead of stopping; stop explicitly via the tree/status-bar Stop action. Off = legacy lifecycle (closing the tab stops sandy). Ignored when the installed sandy lacks daemon support."
         }
       }
     }

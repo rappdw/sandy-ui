@@ -36,6 +36,13 @@ export interface Session {
   panel: vscode.WebviewPanel | undefined;  // current attached panel, undefined = detached
   exited: boolean;
   exitCode?: number;
+  // Set by detach() (daemon backend only) BEFORE killing the local attach
+  // client, so promoteToAttach's onExit can treat the outcome as "detached"
+  // deterministically instead of relying on the exit code an externally
+  // signalled client produces (unverified for signals — the contract's
+  // exit-3-means-detached table is for the user-driven `sandy --attach`
+  // detach keystroke, not for us SIGKILLing our own client).
+  detachRequested?: boolean;
 }
 
 export type SessionEventKind = "spawned" | "attached" | "detached" | "exited" | "client-detached";
@@ -178,7 +185,13 @@ export class PtySupervisor implements vscode.Disposable {
     });
     pty.onExit((code) => {
       if (session.pty !== pty) return; // stale callback from a superseded pty
-      const outcome = classifyAttachExit(code);
+      if (!this.sessions.has(session.id)) return; // already removed (e.g. via stopDaemon's own completion race)
+      // detachRequested wins over the exit-code table: exit 3 is the
+      // contract for a user-driven detach keystroke inside tmux, but an
+      // externally-signalled client's exit code is unspecified — and when
+      // WE initiated the kill (detach()), the intent IS detach regardless
+      // of what code the OS reports.
+      const outcome = session.detachRequested ? "detached" : classifyAttachExit(code);
       if (outcome === "detached") {
         this.log(`daemon client detached workspace=${session.workspacePath}`);
         this.sessions.delete(session.id);
@@ -195,6 +208,28 @@ export class PtySupervisor implements vscode.Disposable {
     });
 
     this.log(`promoted to attach workspace=${session.workspacePath} pid=${pty.pid}`);
+  }
+
+  /**
+   * Abort a daemon session that never got past `sandy --start` (nonzero
+   * exit). beginDaemon() deliberately leaves this decision to the caller —
+   * a start failure means promoteToAttach() never runs, so nothing else
+   * would mark the session exited or clean it out of the map. Mirrors the
+   * exit-handling tail of promoteToAttach's onExit (mark exited, post the
+   * exit message if a panel is still attached, remove from map, fire the
+   * exited event) so callers get the same UI outcome as any other session
+   * death.
+   */
+  abortDaemonStart(workspacePath: string, code: number): void {
+    const session = this.sessions.get(workspacePath);
+    if (!session || session.exited) return;
+    session.exited = true;
+    session.exitCode = code;
+    const p = session.panel;
+    if (p) p.webview.postMessage({ type: "exit", code });
+    this.log(`daemon start aborted workspace=${session.workspacePath} code=${code}`);
+    this.sessions.delete(session.id);
+    this._onDidChange.fire({ kind: "exited", session });
   }
 
   /**
@@ -230,6 +265,10 @@ export class PtySupervisor implements vscode.Disposable {
     this.log(`session detached workspace=${workspacePath}`);
     this._onDidChange.fire({ kind: "detached", session });
     if (session.backend === "daemon") {
+      // Set BEFORE kill(): promoteToAttach's onExit reads this flag to know
+      // the kill it's about to observe was WE-initiated detach intent, not
+      // some other failure — see the Session.detachRequested doc comment.
+      session.detachRequested = true;
       try { session.pty.kill(); } catch { /* may already be dead */ }
     }
   }
@@ -280,6 +319,8 @@ export class PtySupervisor implements vscode.Disposable {
       cp.execFile(sandyBin, stopArgs(session.workspacePath), { timeout: 60_000 }, (err: any) => {
         const label =
           !err ? "stopped" :
+          err.code === "ENOENT" ? "sandy binary missing" :
+          err.killed || err.signal ? "timed out after 60s" :
           err.code === STOP_EXIT.NO_SESSION ? "no-session" :
           err.code === STOP_EXIT.FAILED ? "failed" :
           `error:${err.message}`;
