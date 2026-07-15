@@ -40,6 +40,10 @@ updates:
       # alongside the electron pin.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+      # TypeScript majors are taken deliberately (7.0 broke the build in the
+      # 2026-07-15 triage); minors/patches flow via the build-tooling group.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
