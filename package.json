@@ -284,7 +284,7 @@
     "node-pty": "^1.0.0"
   },
   "devDependencies": {
-    "@electron/rebuild": "^4.0.4",
+    "@electron/rebuild": "^4.2.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
@@ -295,10 +295,10 @@
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
-    "electron": "^41.3.0",
+    "electron": "^43.1.1",
     "esbuild": "^0.28.0",
     "mocha": "^11.7.5",
-    "typescript": "^5.4.0",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.8"
   }
 }
