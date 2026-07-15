@@ -25,7 +25,7 @@ updates:
       # terminal regression checklist (drag-select, wheel-to-tmux, ⌥ behavior,
       # fullscreen TUIs, URL clicks) when upgrading intentionally.
       - dependency-name: "@xterm/*"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
       # @types/vscode must never exceed engines.vscode (vsce refuses to
       # package otherwise). It moves ONLY when we deliberately raise the
       # engines floor — never on its own.
