@@ -18,6 +18,28 @@ updates:
           - "@vscode/vsce"
           - "@electron/rebuild"
           - "electron"
+    ignore:
+      # xterm majors are a deliberate migration, not a bot merge: the mouse
+      # split (CSI interception + wheel re-injection), selection theming, and
+      # the web-links handler are built against xterm 5.5 internals. Run the
+      # terminal regression checklist (drag-select, wheel-to-tmux, ⌥ behavior,
+      # fullscreen TUIs, URL clicks) when upgrading intentionally.
+      - dependency-name: "@xterm/*"
+        update-types: ["version-update:semver-major"]
+      # @types/vscode must never exceed engines.vscode (vsce refuses to
+      # package otherwise). It moves ONLY when we deliberately raise the
+      # engines floor — never on its own.
+      - dependency-name: "@types/vscode"
+      # The electron devDep exists solely so electron-rebuild targets the
+      # user's VSCode Electron ABI for node-pty. It tracks the installed
+      # VSCode, not upstream releases — a newer major here = posix_spawnp
+      # failures at launch.
+      - dependency-name: "electron"
+        update-types: ["version-update:semver-major"]
+      # @types/node tracks the Electron runtime's Node major, moved manually
+      # alongside the electron pin.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
