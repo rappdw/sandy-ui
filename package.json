@@ -297,7 +297,7 @@
     "@xterm/xterm": "^5.5.0",
     "electron": "^41.3.0",
     "esbuild": "^0.28.0",
-    "mocha": "^11.7.5",
+    "mocha": "^11.7.6",
     "typescript": "^5.4.0",
     "vitest": "^4.1.10"
   }
