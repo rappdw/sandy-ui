@@ -103,6 +103,16 @@ docs/reviews/2026-07-03-code-review.md where applicable.
 - Scrollback replay on reattach (tmux capture-pane seeding)
 - Multi-root workspace awareness
 
+## Tracker
+
+Actionable items are filed as milestoned GitHub issues (2026-07-16):
+**0.7.0** → #24 (D1), #25 (D2+D3), #26 (D4), #27 (D5 fixture), #28 (D6), #29 (D11, optional) ·
+**0.8.0** → #30 (D7 compat gate), #31 (D8a walkthrough), #32 (auto-restore) ·
+**0.9.0** → #33 (D9 platform VSIX), #34 (D10 pipeline), #35 (marketplace readiness).
+D12–D15 (accepted-for-1.0) and D16 (parked migrations) are deliberately NOT issues —
+they're decisions recorded here and in docs/reviews/2026-07-03-code-review.md; they
+graduate to issues only if scheduled.
+
 ## Sequencing rationale
 
 0.7 before 0.8 because the fake-sandy fixture (D5) is what lets the compat gate and
