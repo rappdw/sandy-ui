@@ -289,7 +289,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:integration": "npm run compile && npm run compile:integration && vscode-test",
+    "test:integration": "npm run compile && npm run compile:integration && electron-rebuild -f -w node-pty && vscode-test",
     "compile:integration": "tsc -p tsconfig.integration.json",
     "vscode:prepublish": "npm run compile",
     "package-vsix": "vsce package",
