@@ -124,7 +124,11 @@ export function activate(ctx: vscode.ExtensionContext) {
       if (longRunners.length === 1) {
         const r = longRunners[0];
         const label = path.basename(r.workspacePath ?? r.sandboxName);
-        const actions = r.workspacePath ? ["Attach", "Stop"] : ["Stop"];
+        // Without a workspace_path there is nothing either action can do —
+        // Attach needs it for sandy.launch and the tree.stop handler bails
+        // without it (batch-2 verify finding 1). Inform without offering
+        // dead buttons; the user can act from a terminal.
+        const actions = r.workspacePath ? ["Attach", "Stop"] : [];
         void vscode.window.showInformationMessage(
           `Sandy: session for ${label} has been running ${r.age}.`,
           ...actions,
