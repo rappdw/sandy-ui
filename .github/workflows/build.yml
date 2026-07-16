@@ -12,6 +12,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # Windows is red on main and always has been — node-pty/integration were
+    # never made to work there (spec defers Windows support; target is
+    # macOS + Linux). Keep the runner as a canary but stop it from failing
+    # every build and polluting PR signal.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
