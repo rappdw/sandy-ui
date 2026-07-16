@@ -96,9 +96,15 @@ describe("Webview commands open panels", () => {
   it("sandy.settings.open creates a webview panel", async () => {
     const before = countWebviewTabs();
     await vscode.commands.executeCommand("sandy.settings.open");
-    // Give VSCode a tick to register the new tab.
-    await new Promise(r => setTimeout(r, 200));
-    const after = countWebviewTabs();
-    assert.ok(after > before, `expected a new webview panel; before=${before} after=${after}`);
+    // Tab registration in tabGroups is async with no event we can await
+    // here — poll instead of a fixed sleep (a 200ms sleep flaked on the
+    // macOS CI runner: run 29518400642 failed, identical rerun passed).
+    const deadline = Date.now() + 5_000;
+    let after = countWebviewTabs();
+    while (after <= before && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 100));
+      after = countWebviewTabs();
+    }
+    assert.ok(after > before, `expected a new webview panel within 5s; before=${before} after=${after}`);
   });
 });
