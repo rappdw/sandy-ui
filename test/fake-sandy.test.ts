@@ -17,6 +17,12 @@ import { formatAge } from "../src/state/badge";
 
 const FIXTURE = path.join(__dirname, "fixtures", "fake-sandy", "fake-sandy");
 
+// The fixture is a bash script and models sandy's POSIX-only daemon contract
+// (sandy itself doesn't run on Windows; the spec defers Windows support), so
+// this suite is skipped on win32 — where execFileSync of a shebang script
+// can't work anyway. All other vitest suites remain platform-portable.
+const describeUnix = describe.skipIf(process.platform === "win32");
+
 let stateDir: string;
 
 beforeEach(() => {
@@ -65,7 +71,7 @@ function waitForExit(child: ReturnType<typeof spawn>): Promise<number | null> {
   return new Promise((resolve) => child.once("exit", (code) => resolve(code)));
 }
 
-describe("fake-sandy: --print-schema", () => {
+describeUnix("fake-sandy: --print-schema", () => {
   it("parses via the real parseSandySchema and reports daemon capability", () => {
     const { stdout, code } = run(["--print-schema"]);
     expect(code).toBe(0);
@@ -83,7 +89,7 @@ describe("fake-sandy: --print-schema", () => {
   });
 });
 
-describe("fake-sandy: --version", () => {
+describeUnix("fake-sandy: --version", () => {
   it("default output regex-extracts 1.1.0 (mirrors cache.ts's trySandyVersion regex)", () => {
     const { stdout, code } = run(["--version"]);
     expect(code).toBe(0);
@@ -100,7 +106,7 @@ describe("fake-sandy: --version", () => {
   });
 });
 
-describe("fake-sandy: --start", () => {
+describeUnix("fake-sandy: --start", () => {
   it("session appears in --print-state (daemon true, attached_clients 0, parseable started_at)", () => {
     expect(run(["--start", "--workspace", "/tmp/proj-one"]).code).toBe(0);
     const state = JSON.parse(run(["--print-state"]).stdout);
@@ -128,7 +134,7 @@ describe("fake-sandy: --start", () => {
   });
 });
 
-describe("fake-sandy: --attach", () => {
+describeUnix("fake-sandy: --attach", () => {
   it("exits 4 when no session exists for the workspace", () => {
     expect(run(["--attach", "--workspace", "/tmp/never-started"]).code).toBe(4);
   });
@@ -174,7 +180,7 @@ describe("fake-sandy: --attach", () => {
   });
 });
 
-describe("fake-sandy: --stop", () => {
+describeUnix("fake-sandy: --stop", () => {
   it("removes a running session and exits 0", () => {
     run(["--start", "--workspace", "/tmp/proj-d"]);
     expect(run(["--stop", "--workspace", "/tmp/proj-d"]).code).toBe(0);
@@ -187,7 +193,7 @@ describe("fake-sandy: --stop", () => {
   });
 });
 
-describe("fake-sandy: --prune-orphans", () => {
+describeUnix("fake-sandy: --prune-orphans", () => {
   it("resets the orphans knob; --print-state reflects it before and after", () => {
     writeKnob("orphans", "3");
     expect(JSON.parse(run(["--print-state"]).stdout).orphan_networks).toBe(3);
@@ -196,7 +202,7 @@ describe("fake-sandy: --prune-orphans", () => {
   });
 });
 
-describe("fake-sandy: invocation log", () => {
+describeUnix("fake-sandy: invocation log", () => {
   it("records every invocation in order, argv joined by spaces", () => {
     run(["--version"]);
     run(["--print-schema"]);
