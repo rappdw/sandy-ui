@@ -2,7 +2,7 @@
 
 VSCode extension that wraps the [sandy](https://github.com/rappdw/sandy) CLI — runs sandy as a webview-hosted terminal in the editor area, with schema-driven settings and pre-flight approval modals.
 
-> **Status**: 0.6.0, dogfooding for the author. Not yet on Marketplace / OpenVSX. Public distribution is gated on node-pty packaging (macOS TCC was reassessed down from blocker to onboarding note) — see [SPEC_SANDY_UI.md](SPEC_SANDY_UI.md) and [docs/SPIKE_RESULTS.md](docs/SPIKE_RESULTS.md) for the production roadmap.
+> **Status**: 0.7.0, dogfooding for the author. Not yet on Marketplace / OpenVSX. Public distribution is gated on node-pty packaging (macOS TCC was reassessed down from blocker to onboarding note) — see [SPEC_SANDY_UI.md](SPEC_SANDY_UI.md) and [docs/SPIKE_RESULTS.md](docs/SPIKE_RESULTS.md) for the production roadmap.
 
 ## What it gives you
 
@@ -26,7 +26,7 @@ VSCode extension that wraps the [sandy](https://github.com/rappdw/sandy) CLI —
 <!-- VERSION-PIN: update this URL whenever package.json version is bumped (see CLAUDE.md > "On every release") -->
 
 ```bash
-curl -L https://github.com/rappdw/sandy-ui/releases/download/v0.6.0/sandy-ui-0.6.0.vsix -o /tmp/sandy.vsix \
+curl -L https://github.com/rappdw/sandy-ui/releases/download/v0.7.0/sandy-ui-0.7.0.vsix -o /tmp/sandy.vsix \
   && code --install-extension /tmp/sandy.vsix
 # Then: Cmd+Shift+P → "Developer: Reload Window" in any open VSCode window
 ```
@@ -66,7 +66,9 @@ npx electron-rebuild -f -w node-pty
 - `sandy.launch.closeAuxiliaryBar` — on **Sandy: Launch**, close the auxiliary side bar (where the Chat / Copilot panel typically lives) to maximize editor space (default: `true`).
 - `sandy.launch.closeSidebar` — on **Sandy: Launch**, close the primary side bar (Explorer / Search / SCM). Off by default since the file tree is usually wanted alongside sandy (default: `false`).
 - `sandy.terminal.scrollSensitivity` — mouse-wheel / trackpad scroll speed in the Sandy terminal (default `2`, range `0.1`–`10`). Higher scrolls faster, lower gives finer control. Applies live — no reload needed.
-- `sandy.persistSessions` — use sandy's daemon mode (sandy ≥ 1.1.0) so sessions survive VSCode restarts: closing a tab or quitting VSCode detaches instead of stopping; stop explicitly via the tree/status-bar Stop action (default: `true`). Off = legacy lifecycle (closing the tab stops sandy). Ignored when the installed sandy lacks daemon support — the extension itself only requires sandy ≥ 1.0.
+- `sandy.persistSessions` — use sandy's daemon mode (sandy ≥ 1.1.0) so sessions survive VSCode restarts: closing a tab or quitting VSCode detaches instead of stopping; stop explicitly via the tree/status-bar Stop action (default: `true`). Off = legacy lifecycle (closing the tab stops sandy). Ignored when the installed sandy lacks daemon support — the extension itself only requires sandy ≥ 1.0. Setting `sandy.launchCommand` forces the legacy lifecycle regardless.
+- `sandy.longRunningSessionHours` — once per VSCode window, nudge about persisted sessions running longer than this many hours, with Attach/Stop actions (default: `24`; `0` disables).
+- `sandy.terminal.mouseMode` — `nativeSelection` (default): drag selects text natively, wheel forwards to tmux, in-app clicks aren't delivered. `tmux`: tmux owns the mouse (in-app clicks and pane interactions work); text selection needs ⌥-drag. Applies live to running terminals.
 
 ## Architecture
 
