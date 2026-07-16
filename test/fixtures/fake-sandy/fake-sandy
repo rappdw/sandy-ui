@@ -1,0 +1,321 @@
+#!/usr/bin/env bash
+# fake-sandy — deterministic stand-in for the real `sandy` CLI's daemon
+# contract (frozen on rappdw/sandy-ui#12; see src/daemon/contract.ts).
+# Used by test/fake-sandy.test.ts (vitest, runs everywhere) and
+# test/integration/daemon.test.ts (@vscode/test-electron, CI only).
+#
+# What this fakes: --version, --print-schema (daemon-capable cli_flags +
+# a couple of config keys), --print-state (sandboxes/running_containers
+# derived from on-disk session files), --start/--attach/--stop (the
+# two-phase daemon launch + teardown), --prune-orphans, plus a bare/
+# unknown-flag fallback for the legacy (non-daemon) launch path.
+#
+# What this deliberately does NOT do: touch Docker, spawn tmux, persist
+# beyond $FAKE_SANDY_STATE, or model anything outside the frozen CLI
+# contract surface sandy-ui actually consumes.
+#
+# State lives entirely under $FAKE_SANDY_STATE (required for every
+# mutating/state command — this script refuses rather than writing
+# anywhere surprising when it's unset):
+#   log                     — append-only invocation log, one line per
+#                              invocation (argv joined by spaces; a bare
+#                              invocation with no args logs an empty line)
+#   sessions/<name>.json     — one file per "running" session:
+#                              {"workspace_path","started_at","attached_clients"}
+#   sessions/<name>.detach   — control file: makes a blocked --attach exit 3
+#   sessions/<name>.end      — control file: makes a blocked --attach exit 0
+#                              and removes the session
+#   knobs/start-exit         — numeric; --start exits with this code
+#   knobs/attach-exit        — numeric; --attach exits with this code immediately
+#   knobs/version             — overrides --version output (and --print-schema's
+#                              sandy.version, numeric part extracted)
+#   knobs/no-daemon-flags     — presence-only; --print-schema omits daemon cli_flags
+#   knobs/orphans             — numeric; --print-state's orphan_networks (default 0)
+#
+# Workspace -> session name is a pure function of the workspace path (no
+# lookup table needed): sanitize the basename the way sandy does
+# (tr -cd 'a-zA-Z0-9._-', "project" when empty) and append a fixed
+# "-fake0001" suffix, so tests can predict names without shelling out.
+#
+# POSIX-y bash 3.2 discipline (macOS ships bash 3.2 as /bin/bash): no
+# associative arrays, no ${var,,}, no `mapfile`/`readarray`, no `wait -n`.
+
+set -euo pipefail
+
+now_iso() {
+  date -u +"%Y-%m-%dT%H:%M:%SZ"
+}
+
+require_state() {
+  if [ -z "${FAKE_SANDY_STATE:-}" ]; then
+    echo "fake-sandy: FAKE_SANDY_STATE is required for this command" >&2
+    exit 1
+  fi
+}
+
+log_invocation() {
+  if [ -n "${FAKE_SANDY_STATE:-}" ]; then
+    mkdir -p "$FAKE_SANDY_STATE"
+    printf '%s\n' "$*" >> "$FAKE_SANDY_STATE/log"
+  fi
+}
+
+read_knob() {
+  # $1 = knob name, $2 = default
+  local f="$FAKE_SANDY_STATE/knobs/$1"
+  if [ -f "$f" ]; then cat "$f"; else printf '%s' "$2"; fi
+}
+
+sanitize_basename() {
+  local base
+  base=$(basename "$1")
+  base=$(printf '%s' "$base" | tr -cd 'a-zA-Z0-9._-')
+  if [ -z "$base" ]; then base="project"; fi
+  printf '%s' "$base"
+}
+
+session_name_for() {
+  printf '%s-fake0001' "$(sanitize_basename "$1")"
+}
+
+extract_workspace() {
+  # Scans argv for "--workspace VALUE" and echoes VALUE. Returns 1 if absent.
+  local prev=""
+  local arg
+  for arg in "$@"; do
+    if [ "$prev" = "--workspace" ]; then
+      printf '%s' "$arg"
+      return 0
+    fi
+    prev="$arg"
+  done
+  return 1
+}
+
+session_field() {
+  # $1 = session json file, $2 = field name. Parses our own fixed one-line
+  # JSON shape with grep+sed — safe because we're the only writer.
+  local file="$1" field="$2"
+  case "$field" in
+    attached_clients)
+      grep -o '"attached_clients":[0-9]*' "$file" | head -1 | sed -E 's/.*:([0-9]+)/\1/'
+      ;;
+    *)
+      grep -o "\"$field\":\"[^\"]*\"" "$file" | head -1 | sed -E "s/.*:\"([^\"]*)\"/\1/"
+      ;;
+  esac
+}
+
+write_session() {
+  # $1 = name, $2 = workspace_path, $3 = started_at, $4 = attached_clients
+  mkdir -p "$FAKE_SANDY_STATE/sessions"
+  printf '{"workspace_path":"%s","started_at":"%s","attached_clients":%s}\n' \
+    "$2" "$3" "$4" > "$FAKE_SANDY_STATE/sessions/$1.json"
+}
+
+set_attached_clients() {
+  # $1 = name, $2 = new attached_clients value. No-op if the session is gone.
+  local f="$FAKE_SANDY_STATE/sessions/$1.json"
+  [ -f "$f" ] || return 0
+  local ws started
+  ws=$(session_field "$f" workspace_path)
+  started=$(session_field "$f" started_at)
+  write_session "$1" "$ws" "$started" "$2"
+}
+
+cmd_version() {
+  local v="sandy 1.1.0"
+  if [ -n "${FAKE_SANDY_STATE:-}" ] && [ -f "$FAKE_SANDY_STATE/knobs/version" ]; then
+    v=$(cat "$FAKE_SANDY_STATE/knobs/version")
+  fi
+  echo "$v"
+  exit 0
+}
+
+cmd_print_schema() {
+  local no_daemon=0
+  if [ -n "${FAKE_SANDY_STATE:-}" ] && [ -f "$FAKE_SANDY_STATE/knobs/no-daemon-flags" ]; then
+    no_daemon=1
+  fi
+
+  local ver="1.1.0"
+  if [ -n "${FAKE_SANDY_STATE:-}" ] && [ -f "$FAKE_SANDY_STATE/knobs/version" ]; then
+    local extracted
+    extracted=$(cat "$FAKE_SANDY_STATE/knobs/version" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.-]*' | head -1 || true)
+    if [ -n "$extracted" ]; then ver="$extracted"; fi
+  fi
+
+  local cli_flags="[]"
+  if [ "$no_daemon" -eq 0 ]; then
+    cli_flags='[{"name":"--start"},{"name":"--attach"},{"name":"--stop"},{"name":"--prune-orphans"}]'
+  fi
+
+  cat <<JSON
+{
+  "schema_version": 1,
+  "sandy": { "version": "$ver" },
+  "config": {
+    "privileged_keys": [
+      { "name": "SANDY_ALLOW_NO_ISOLATION", "type": "bool", "passive_approval_required": true, "default": false, "description": "Allow launch without iptables rules on Linux. Security-sensitive." }
+    ],
+    "passive_keys": [
+      { "name": "SANDY_AGENT", "type": "string", "default": "claude", "description": "AI agent(s) to run." },
+      { "name": "SANDY_MODEL", "type": "string", "description": "Claude model override for sessions." },
+      { "name": "ANTHROPIC_API_KEY", "type": "secret", "description": "Anthropic API key." }
+    ],
+    "env_only_keys": []
+  },
+  "cli_flags": $cli_flags
+}
+JSON
+  exit 0
+}
+
+cmd_validate_config() {
+  echo '{"schema_version":1,"approval_status":"none_required"}'
+  exit 0
+}
+
+cmd_print_state() {
+  require_state
+  local orphans
+  orphans=$(read_knob "orphans" "0")
+
+  shopt -s nullglob
+  local sandboxes_json="" containers_json="" first=1
+  local f
+  for f in "$FAKE_SANDY_STATE"/sessions/*.json; do
+    [ -f "$f" ] || continue
+    local name ws started ac sb rc
+    name=$(basename "$f" .json)
+    ws=$(session_field "$f" workspace_path)
+    started=$(session_field "$f" started_at)
+    ac=$(session_field "$f" attached_clients)
+
+    sb=$(printf '{"name":"%s","path":"%s","workspace_path":"%s","lock_held":true}' \
+      "$name" "$FAKE_SANDY_STATE/sandboxes/$name" "$ws")
+    rc=$(printf '{"id":"cid-%s","name":"sandy-%s","sandbox":"%s","daemon":true,"attached_clients":%s,"started_at":"%s"}' \
+      "$name" "$name" "$name" "$ac" "$started")
+
+    if [ "$first" -eq 1 ]; then
+      sandboxes_json="$sb"
+      containers_json="$rc"
+      first=0
+    else
+      sandboxes_json="$sandboxes_json,$sb"
+      containers_json="$containers_json,$rc"
+    fi
+  done
+
+  printf '{"schema_version":1,"docker_reachable":true,"sandboxes":[%s],"approvals":[],"running_containers":[%s],"orphan_networks":%s}\n' \
+    "$sandboxes_json" "$containers_json" "$orphans"
+  exit 0
+}
+
+cmd_start() {
+  require_state
+  local ws
+  ws=$(extract_workspace "$@") || { echo "fake-sandy: --start requires --workspace" >&2; exit 1; }
+  local name
+  name=$(session_name_for "$ws")
+
+  local exit_code="0"
+  if [ -f "$FAKE_SANDY_STATE/knobs/start-exit" ]; then
+    exit_code=$(cat "$FAKE_SANDY_STATE/knobs/start-exit")
+  fi
+
+  if [ "$exit_code" != "0" ]; then
+    echo "fake-sandy: failing start"
+    exit "$exit_code"
+  fi
+
+  echo "fake-sandy: building image..."
+  echo "fake-sandy: session ready"
+  write_session "$name" "$ws" "$(now_iso)" 0
+  exit 0
+}
+
+cmd_attach() {
+  require_state
+  local ws
+  ws=$(extract_workspace "$@") || { echo "fake-sandy: --attach requires --workspace" >&2; exit 1; }
+  local name
+  name=$(session_name_for "$ws")
+
+  if [ -f "$FAKE_SANDY_STATE/knobs/attach-exit" ]; then
+    local code
+    code=$(cat "$FAKE_SANDY_STATE/knobs/attach-exit")
+    exit "$code"
+  fi
+
+  local f="$FAKE_SANDY_STATE/sessions/$name.json"
+  if [ ! -f "$f" ]; then
+    exit 4
+  fi
+
+  set_attached_clients "$name" 1
+
+  # Mimics an externally-signalled client (tab close / VSCode quit): the
+  # frozen contract's exit-3 code is really for the user-driven detach
+  # keystroke, but 3 is the safe "session lives on" outcome for a signalled
+  # kill too — sandy-ui's own detachRequested flag is what actually
+  # disambiguates on the caller side (see supervisor.ts), so the exact code
+  # here just needs to be a plausible "detached" outcome.
+  trap 'set_attached_clients "$name" 0; exit 3' TERM HUP INT
+
+  while true; do
+    if [ -f "$FAKE_SANDY_STATE/sessions/$name.detach" ]; then
+      rm -f "$FAKE_SANDY_STATE/sessions/$name.detach"
+      set_attached_clients "$name" 0
+      exit 3
+    fi
+    if [ -f "$FAKE_SANDY_STATE/sessions/$name.end" ]; then
+      rm -f "$FAKE_SANDY_STATE/sessions/$name.end"
+      rm -f "$f"
+      exit 0
+    fi
+    sleep 0.2
+  done
+}
+
+cmd_stop() {
+  require_state
+  local ws
+  ws=$(extract_workspace "$@") || { echo "fake-sandy: --stop requires --workspace" >&2; exit 1; }
+  local name
+  name=$(session_name_for "$ws")
+  local f="$FAKE_SANDY_STATE/sessions/$name.json"
+  if [ ! -f "$f" ]; then
+    exit 4
+  fi
+  rm -f "$f"
+  exit 0
+}
+
+cmd_prune_orphans() {
+  require_state
+  mkdir -p "$FAKE_SANDY_STATE/knobs"
+  printf '0' > "$FAKE_SANDY_STATE/knobs/orphans"
+  exit 0
+}
+
+cmd_bare() {
+  echo "fake-sandy interactive session"
+  sleep 0.3
+  exit 0
+}
+
+log_invocation "$@"
+
+case "${1:-}" in
+  --version)        cmd_version ;;
+  --print-schema)    cmd_print_schema ;;
+  --print-state)     cmd_print_state ;;
+  --validate-config) cmd_validate_config ;;
+  --start)           shift; cmd_start "$@" ;;
+  --attach)          shift; cmd_attach "$@" ;;
+  --stop)            shift; cmd_stop "$@" ;;
+  --prune-orphans)   cmd_prune_orphans ;;
+  "")                cmd_bare ;;
+  *)                 exit 0 ;;
+esac
