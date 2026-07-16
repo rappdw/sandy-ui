@@ -94,11 +94,17 @@ export async function openTerminalPanel(
   // cheap (cache-hit path). `sandy.persistSessions` gates it off entirely
   // (legacy lifecycle); a missing/unresolvable sandy binary also falls
   // back to legacy — there's nothing to run --start/--attach with.
+  // `sandy.launchCommand` (read ONCE, here) is a harder override: an
+  // explicit launch command forces the legacy lifecycle unconditionally —
+  // short-circuit FIRST so an overridden launch doesn't even shell out to
+  // the schema cache to check daemon capability (sandy-ui#24).
+  const launchOverride = vscode.workspace.getConfiguration("sandy").get<string>("launchCommand", "").trim();
   const persist = vscode.workspace.getConfiguration("sandy").get<boolean>("persistSessions", true);
-  const daemonCapable = persist && hasDaemonCapability((await getCachedSchema(ctx.globalStorageUri.fsPath, schemaMock as Schema)).schema);
+  const daemonCapable = !launchOverride && persist && hasDaemonCapability((await getCachedSchema(ctx.globalStorageUri.fsPath, schemaMock as Schema)).schema);
   const sandyBin = daemonCapable ? resolveSandyBinary() : undefined;
-  const useDaemon = daemonCapable && !!sandyBin;   // no resolvable binary → legacy path
-  log(`launch mode: ${useDaemon ? "daemon" : "legacy"} (persistSessions=${persist}, daemonCapable=${daemonCapable}, sandyBin=${sandyBin ?? "n/a"})`);
+  const useDaemon = !launchOverride && daemonCapable && !!sandyBin;   // no resolvable binary → legacy path
+  log(`launch mode: ${useDaemon ? "daemon" : "legacy"} (persistSessions=${persist}, daemonCapable=${daemonCapable}, sandyBin=${sandyBin ?? "n/a"}, launchOverride=${launchOverride || "none"})`);
+  if (launchOverride) log("launchCommand override set — legacy lifecycle");
 
   // Maximize editor space for the sandy session if the user has opted in
   // (defaults: bottom panel + auxiliary bar closed; primary sidebar kept).
@@ -335,9 +341,8 @@ export async function openTerminalPanel(
         log(`PATH: ${env.PATH}`);
 
         // Allow explicit override via workspace setting.
-        const override = vscode.workspace.getConfiguration("sandy").get<string>("launchCommand", "").trim();
-        const candidates = override
-          ? [{ command: override.split(/\s+/)[0], args: override.split(/\s+/).slice(1) }]
+        const candidates = launchOverride
+          ? [{ command: launchOverride.split(/\s+/)[0], args: launchOverride.split(/\s+/).slice(1) }]
           : launchCandidates();
         log(`candidates: ${candidates.map(c => `${c.command} ${c.args.join(" ")}`.trim()).join("  |  ")}`);
 

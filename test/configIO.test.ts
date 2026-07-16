@@ -250,4 +250,36 @@ describe("saveScope (workspace tmp-dir, never touches HOME)", () => {
     saveScope("workspace", tmp, schema, { ANTHROPIC_API_KEY: "" });
     expect(readKv(workspaceSecretsPath(tmp))).toEqual({ ANTHROPIC_API_KEY: "sk-keep" });
   });
+
+  it("clearSecrets removes an existing secret and keeps others; file rewritten without the key", () => {
+    writeKvAtomic(workspaceSecretsPath(tmp), { ANTHROPIC_API_KEY: "sk-gone", OPENAI_API_KEY: "sk-kept" });
+    const { refusedClears } = saveScope("workspace", tmp, schema, {}, ["ANTHROPIC_API_KEY"]);
+    expect(refusedClears).toEqual([]);
+    expect(readKv(workspaceSecretsPath(tmp))).toEqual({ OPENAI_API_KEY: "sk-kept" });
+  });
+
+  it("clearSecrets on a non-secret key (per schema) is REFUSED (config key untouched)", () => {
+    writeKvAtomic(workspaceConfigPath(tmp), { SANDY_AGENT: "claude" });
+    const { refusedClears } = saveScope("workspace", tmp, schema, {}, ["SANDY_AGENT"]);
+    expect(refusedClears).toEqual(["SANDY_AGENT"]);
+    expect(readKv(workspaceConfigPath(tmp))).toEqual({ SANDY_AGENT: "claude" });
+  });
+
+  it("clearSecrets simultaneously with a new value for a DIFFERENT secret works", () => {
+    writeKvAtomic(workspaceSecretsPath(tmp), { ANTHROPIC_API_KEY: "sk-gone" });
+    const { refusedClears } = saveScope(
+      "workspace", tmp, schema,
+      { OPENAI_API_KEY: "sk-new" },
+      ["ANTHROPIC_API_KEY"],
+    );
+    expect(refusedClears).toEqual([]);
+    expect(readKv(workspaceSecretsPath(tmp))).toEqual({ OPENAI_API_KEY: "sk-new" });
+  });
+
+  it("clearing the last secret leaves an empty-but-valid secrets file (readKv → {})", () => {
+    writeKvAtomic(workspaceSecretsPath(tmp), { ANTHROPIC_API_KEY: "sk-only" });
+    saveScope("workspace", tmp, schema, {}, ["ANTHROPIC_API_KEY"]);
+    expect(fs.existsSync(workspaceSecretsPath(tmp))).toBe(true);
+    expect(readKv(workspaceSecretsPath(tmp))).toEqual({});
+  });
 });

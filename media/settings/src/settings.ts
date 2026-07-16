@@ -45,8 +45,13 @@ interface PersistedState {
   scopes: { home: ScopeState; workspace: ScopeState };
 }
 
+interface SchemaSource {
+  kind: "cache" | "fresh" | "fallback";
+  error?: string;
+}
+
 type FromHost =
-  | { type: "schema"; schema: Schema; scopes: { home: ScopeFromHost; workspace: ScopeFromHost | null } }
+  | { type: "schema"; schema: Schema; source: SchemaSource; scopes: { home: ScopeFromHost; workspace: ScopeFromHost | null } }
   | { type: "saved"; scope: Scope };
 
 interface ScopeFromHost {
@@ -59,7 +64,7 @@ interface ScopeFromHost {
 
 type ToHost =
   | { type: "ready" }
-  | { type: "save"; scope: Scope; values: Record<string, string> }
+  | { type: "save"; scope: Scope; values: Record<string, string>; clearSecrets?: string[] }
   | { type: "log"; level: "info" | "error"; msg: string };
 
 (() => {
@@ -88,9 +93,10 @@ type ToHost =
 
   // ---- State ---------------------------------------------------------------
   let schema: Schema | null = null;
+  let schemaSource: SchemaSource | null = null;
   let activeScope: Scope = "workspace";  // default to project; falls back to home if no workspace
   // Values captured at save-click, committed on the host's "saved" ack.
-  let pendingSave: { scope: Scope; values: Record<string, string> } | null = null;
+  let pendingSave: { scope: Scope; values: Record<string, string>; clearSecrets: string[] } | null = null;
   const emptyScope = (): ScopeState => ({
     configPath: "", secretsPath: "",
     values: {}, initial: {}, form: {},
@@ -102,6 +108,31 @@ type ToHost =
     workspace: { ...emptyScope(), available: false },
   };
 
+  // ---- Loading state ---------------------------------------------------------
+  // Shown until the first "schema" message arrives (sandy-ui#25b) — up to
+  // ~15s against a wedged sandy/docker otherwise leaves a blank panel with
+  // no feedback. renderActive() (called once "schema" lands) does its own
+  // form.replaceChildren(), so this node is discarded automatically.
+  function showSchemaLoading(): void {
+    const form = $("form");
+    form.replaceChildren();
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.id = "schema-loading";
+    p.textContent = "Loading sandy schema…";
+    form.appendChild(p);
+  }
+
+  function renderSchemaWarn(): void {
+    const warn = $("schema-warn");
+    if (schemaSource?.kind === "fallback") {
+      warn.hidden = false;
+      warn.textContent = `Showing the bundled mock schema — sandy was unreachable (${schemaSource.error ?? "unknown error"}). Fields may not match your sandy version; saves still write real files.`;
+    } else {
+      warn.hidden = true;
+    }
+  }
+
   // ---- Hide/show restoration ------------------------------------------------
   const persisted = vscode.getState<PersistedState>();
   if (persisted) {
@@ -109,8 +140,11 @@ type ToHost =
     activeScope = persisted.activeScope || "workspace";
     Object.assign(scopes.home, persisted.scopes?.home ?? {});
     Object.assign(scopes.workspace, persisted.scopes?.workspace ?? {});
-    if (schema) renderActive();
   }
+  // A restored session that already has a schema skips straight to the form
+  // — only a cold boot (no getState yet) shows the loading hint.
+  if (schema) renderActive();
+  else showSchemaLoading();
 
   // ---- Host messages -------------------------------------------------------
   function ingestScope(target: ScopeState, src: ScopeFromHost): void {
@@ -128,6 +162,7 @@ type ToHost =
     const m = e.data as FromHost;
     if (m.type === "schema") {
       schema = m.schema;
+      schemaSource = m.source;
       ingestScope(scopes.home, m.scopes.home);
       if (m.scopes.workspace) {
         ingestScope(scopes.workspace, m.scopes.workspace);
@@ -137,13 +172,16 @@ type ToHost =
       }
       saveState();
       renderTabs();
+      renderSchemaWarn();
       renderActive();
     } else if (m.type === "saved") {
       const scope = m.scope || activeScope;
       // Use the payload captured at save-click, NOT a fresh collect(): the
       // ack is async, and if the user switched tabs in between, collect()
       // would read the OTHER scope's DOM into this scope's baseline.
-      const v = pendingSave && pendingSave.scope === scope ? pendingSave.values : collect();
+      const usePending = pendingSave !== null && pendingSave.scope === scope;
+      const v = usePending ? pendingSave!.values : collect();
+      const clearedKeys = usePending ? pendingSave!.clearSecrets : [];
       pendingSave = null;
       scopes[scope].initial = { ...v };
       scopes[scope].form    = { ...v };
@@ -152,6 +190,12 @@ type ToHost =
         if ((f.type === "secret" || f.tier === "secrets") && v[f.key]) {
           scopes[scope].secretsPresent[f.key] = true;
         }
+      }
+      // Cleared secrets flip presence off. The row's clearSecret dataset
+      // marker is DOM-only and lives on the node renderActive() below is
+      // about to discard, so there's no separate "drop the marker" step.
+      for (const k of clearedKeys) {
+        scopes[scope].secretsPresent[k] = false;
       }
       saveState();
       renderActive();  // refresh badges
@@ -302,6 +346,39 @@ type ToHost =
         wrap.className = "secret-wrap";
         wrap.appendChild(i);
         wrap.appendChild(reveal);
+
+        // Clear affordance (sandy-ui#25a) — only rendered when a value is
+        // already stored; a not-set secret has nothing to clear. Toggles
+        // row.dataset.clearSecret rather than clearing immediately so the
+        // user can undo before Save actually deletes the key.
+        if (isSet) {
+          const clearBtn = document.createElement("button");
+          clearBtn.type = "button";
+          clearBtn.className = "clear-secret";
+          clearBtn.textContent = "clear";
+          clearBtn.addEventListener("click", () => {
+            const clearing = row.dataset.clearSecret === f.key;
+            if (clearing) {
+              delete row.dataset.clearSecret;
+              badge.className = "badge badge-set";
+              badge.textContent = "✓ set";
+              i.disabled = false;
+              i.placeholder = "(leave blank to keep current value)";
+              clearBtn.textContent = "clear";
+            } else {
+              row.dataset.clearSecret = f.key;
+              badge.className = "badge badge-clearing";
+              badge.textContent = "will clear on save";
+              i.value = "";
+              i.disabled = true;
+              i.placeholder = "(will be cleared)";
+              clearBtn.textContent = "undo";
+            }
+            persistFormFromDom();
+          });
+          wrap.appendChild(clearBtn);
+        }
+
         row.appendChild(wrap);
         if (f.description) {
           const d = document.createElement("p"); d.className = "desc"; d.textContent = f.description;
@@ -368,6 +445,22 @@ type ToHost =
     return out;
   }
 
+  // Rows currently toggled to "will clear on save". Excludes any row where
+  // the user also typed a value — typed value wins. In practice this can't
+  // happen since the input is disabled while a row is marked cleared, but
+  // filtered defensively anyway.
+  function collectClearSecrets(): string[] {
+    const out: string[] = [];
+    for (const row of Array.from($("form").children)) {
+      const key = (row as HTMLElement).dataset.clearSecret;
+      if (!key) continue;
+      const keyEl = row.querySelector("[data-key]") as HTMLInputElement | null;
+      if (keyEl && keyEl.value) continue;
+      out.push(key);
+    }
+    return out;
+  }
+
   function persistFormFromDom(): void {
     if (!schema) return;
     scopes[activeScope].form = collect();
@@ -404,8 +497,9 @@ type ToHost =
   $("save").addEventListener("click", () => {
     persistFormFromDom();
     const values = collect();
-    pendingSave = { scope: activeScope, values };
-    vscode.postMessage({ type: "save", scope: activeScope, values } satisfies ToHost);
+    const clearSecrets = collectClearSecrets();
+    pendingSave = { scope: activeScope, values, clearSecrets };
+    vscode.postMessage({ type: "save", scope: activeScope, values, clearSecrets } satisfies ToHost);
   });
   $("revert").addEventListener("click", () => {
     scopes[activeScope].form = { ...scopes[activeScope].initial };

@@ -89,12 +89,21 @@ export function partitionByTier(schema: Schema, kv: Record<string, string>): { c
 // save — the user cleared a field, hit Save, and the value came back.
 // Secrets are exempt from this convention: the UI's blank-secret input means
 // "keep current value" and collect() never sends blank secrets.
+//
+// clearSecrets (sandy-ui#25) is the explicit "delete this secret" affordance
+// — distinct from the blank-means-keep convention above, since a secret
+// input can't be typed blank to signal deletion. Only schema-verified
+// SECRET-tier keys may be cleared through this channel: a hostile or buggy
+// webview message naming a non-secret key must not be able to delete
+// arbitrary config keys via clearSecrets. Refused keys are returned so the
+// caller can log them (this module has no output channel of its own).
 export function saveScope(
   scope: Scope,
   workspaceFsPath: string | undefined,
   schema: Schema,
-  kv: Record<string, string>
-) {
+  kv: Record<string, string>,
+  clearSecrets: string[] = []
+): { refusedClears: string[] } {
   const { config, secrets } = partitionByTier(schema, kv);
   const configTarget  = configPathFor(scope, workspaceFsPath);
   const secretsTarget = secretsPathFor(scope, workspaceFsPath);
@@ -108,8 +117,17 @@ export function saveScope(
   }
   writeKvAtomic(configTarget, mergedConfig, 0o644);
 
+  const byKey = new Map(schema.fields.map(f => [f.key, f]));
+  const isSecretKey = (k: string) => { const f = byKey.get(k); return f?.tier === "secrets" || f?.type === "secret"; };
+  const verifiedClears = clearSecrets.filter(isSecretKey);
+  const refusedClears  = clearSecrets.filter(k => !isSecretKey(k));
+
   const nonEmptySecrets = Object.fromEntries(Object.entries(secrets).filter(([, v]) => v !== ""));
-  if (Object.keys(nonEmptySecrets).length > 0 || Object.keys(existingSecrets).length > 0) {
-    writeKvAtomic(secretsTarget, { ...existingSecrets, ...nonEmptySecrets }, 0o600);
+  const mergedSecrets = { ...existingSecrets, ...nonEmptySecrets };
+  for (const k of verifiedClears) delete mergedSecrets[k];
+  if (Object.keys(nonEmptySecrets).length > 0 || Object.keys(existingSecrets).length > 0 || verifiedClears.length > 0) {
+    writeKvAtomic(secretsTarget, mergedSecrets, 0o600);
   }
+
+  return { refusedClears };
 }

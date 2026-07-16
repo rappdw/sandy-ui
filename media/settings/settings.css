@@ -90,11 +90,14 @@ h1 { font-size: 20px; margin: 0 0 12px; }
   border-radius: 8px;
   vertical-align: middle;
 }
-.badge-set   { background: var(--vscode-testing-iconPassed, #4caf50); color: white; }
-.badge-unset { background: var(--vscode-input-border, #555);          color: var(--vscode-descriptionForeground); }
+.badge-set      { background: var(--vscode-testing-iconPassed, #4caf50); color: white; }
+.badge-unset    { background: var(--vscode-input-border, #555);          color: var(--vscode-descriptionForeground); }
+.badge-clearing { background: var(--vscode-editorWarning-foreground, #cca700); color: white; }
 .secret-wrap { display: flex; gap: 6px; }
 .secret-wrap input { flex: 1; }
-.reveal {
+.secret-wrap input:disabled { opacity: 0.6; }
+.reveal,
+.clear-secret {
   background: var(--vscode-button-secondaryBackground, #3a3d41);
   color: var(--vscode-button-secondaryForeground, #fff);
   border: 1px solid transparent;

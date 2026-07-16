@@ -63,7 +63,8 @@ export function openSettingsPanel(ctx: vscode.ExtensionContext) {
         break;
       }
       case "ready": {
-        const schema = (await schemaPromise).schema;
+        const resolution = await schemaPromise;
+        const schema = resolution.schema;
         const homeConfig    = readKv(HOME_CONFIG);
         const homeSecrets   = readKv(HOME_SECRETS);
         const wsConfig      = wsConfigPath  ? readKv(wsConfigPath)  : {};
@@ -84,6 +85,7 @@ export function openSettingsPanel(ctx: vscode.ExtensionContext) {
         panel.webview.postMessage({
           type: "schema",
           schema,
+          source: { kind: resolution.source, error: resolution.error },
           scopes: {
             home: {
               configPath:     HOME_CONFIG,
@@ -106,13 +108,16 @@ export function openSettingsPanel(ctx: vscode.ExtensionContext) {
       case "save": {
         const scope = m.scope as Scope;
         const incoming = m.values as Record<string, string>;
-        log(`save (scope=${scope}) — incoming keys: ${Object.keys(incoming).join(",")}`);
+        const clearSecrets = (m.clearSecrets as string[] | undefined) ?? [];
+        log(`save (scope=${scope}) — incoming keys: ${Object.keys(incoming).join(",")}` +
+          (clearSecrets.length ? `, clearSecrets: ${clearSecrets.join(",")}` : ""));
         try {
           if (scope === "workspace" && !ws) {
             throw new Error("No workspace folder open — cannot save to workspace scope.");
           }
           const schema = (await schemaPromise).schema;
-          saveScope(scope, ws, schema, incoming);
+          const { refusedClears } = saveScope(scope, ws, schema, incoming, clearSecrets);
+          if (refusedClears.length) log(`REFUSED clearSecrets (not schema secret-tier keys): ${refusedClears.join(",")}`);
           const configTarget  = scope === "home" ? HOME_CONFIG  : wsConfigPath!;
           const secretsTarget = secretsPathFor(scope, ws);
           const verifyConfig  = readKv(configTarget);
@@ -132,6 +137,14 @@ export function openSettingsPanel(ctx: vscode.ExtensionContext) {
             } else {
               log(`ok ${k} (${where})`);
             }
+          }
+          // clearSecrets keys never appear in `incoming` (a cleared secret
+          // row's input stays blank, and collect() skips blank secrets), so
+          // they need their own expect-absent-from-secrets check.
+          const verifiedClears = clearSecrets.filter(k => !refusedClears.includes(k));
+          for (const k of verifiedClears) {
+            if (verifySecrets[k] === undefined) log(`ok ${k} (secret cleared)`);
+            else log(`MISMATCH ${k}: expected cleared, still present in secrets`);
           }
           const wroteSecrets = Object.keys(incoming).some(k => incoming[k] !== "" && verifySecrets[k] != null);
           vscode.window.showInformationMessage(`Saved to ${configTarget}${wroteSecrets ? ` and ${secretsTarget}` : ""}`);
@@ -157,6 +170,7 @@ function renderHtml(uris: { cspSource: string; js: vscode.Uri; css: vscode.Uri }
 </head>
 <body>
   <h1>Sandy Settings</h1>
+  <p id="schema-warn" class="warn" hidden></p>
   <div id="tabs" role="tablist">
     <button id="tab-workspace" class="tab active" role="tab">Project</button>
     <button id="tab-home"      class="tab"        role="tab">Global</button>

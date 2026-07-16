@@ -231,7 +231,7 @@
         "sandy.launchCommand": {
           "type": "string",
           "default": "",
-          "description": "Override the launch command. Empty = auto-detect (sandy → tmux → $SHELL). Example: \"tmux new-session -A -s sandy-spike\" or \"/bin/bash -l\"."
+          "description": "Override the launch command. Empty = auto-detect (sandy → tmux → $SHELL). Example: \"tmux new-session -A -s sandy-spike\" or \"/bin/bash -l\". Setting this forces the legacy (non-daemon) lifecycle — it overrides sandy.persistSessions."
         },
         "sandy.launch.closeBottomPanel": {
           "type": "boolean",
