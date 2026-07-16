@@ -29,7 +29,8 @@ type FromHost =
   | { type: "data"; data: string }
   | { type: "exit"; code: number }
   | { type: "refit" }
-  | { type: "scrollSensitivity"; value: number };
+  | { type: "scrollSensitivity"; value: number }
+  | { type: "mouseMode"; value: string };
 
 export async function openTerminalPanel(
   ctx: vscode.ExtensionContext,
@@ -158,8 +159,20 @@ export async function openTerminalPanel(
     panel.webview.postMessage(<FromHost>{ type: "scrollSensitivity", value });
   };
   pushScrollSensitivity();
+
+  // Push the mouse-mode setting to the webview, now and whenever the setting
+  // changes — so switching nativeSelection/tmux applies live to a running
+  // terminal, no reload needed (mirrors pushScrollSensitivity above).
+  const pushMouseMode = () => {
+    const value = vscode.workspace
+      .getConfiguration("sandy.terminal")
+      .get<string>("mouseMode", "nativeSelection");  // fallback matches package.json default
+    panel.webview.postMessage(<FromHost>{ type: "mouseMode", value });
+  };
+  pushMouseMode();
   const cfgSub = vscode.workspace.onDidChangeConfiguration((e) => {
     if (e.affectsConfiguration("sandy.terminal.scrollSensitivity")) pushScrollSensitivity();
+    if (e.affectsConfiguration("sandy.terminal.mouseMode")) pushMouseMode();
   });
 
   log(`openTerminalPanel: workspace=${ws}${isReattach ? " (re-attach)" : ""}`);
@@ -169,6 +182,7 @@ export async function openTerminalPanel(
       case "ready": {
         log(`webview ready (initial size ${m.cols}x${m.rows})`);
         pushScrollSensitivity(); // guaranteed-delivered now the listener is up
+        pushMouseMode();         // ditto
 
         if (isReattach && existingSession) {
           // Re-attach: skip lock sweep, skip spawn. Bind the panel to the

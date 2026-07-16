@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import * as path from "path";
 import * as os from "os";
 import { StatePoller, StateResolution } from "./state/poller";
-import { deriveBadge, daemonInfoFor, SandboxBadge, DaemonInfo } from "./state/badge";
+import { deriveBadge, daemonInfoFor, formatAge, SandboxBadge, DaemonInfo } from "./state/badge";
 import type { SandySandbox, SandyRunningContainer } from "./state/types";
 import type { PtySupervisor } from "./terminal/supervisor";
 
@@ -192,7 +192,9 @@ function describe(s: SandySandbox, badge: SandboxBadge, daemonInfo?: DaemonInfo)
   const clients = daemonInfo.attachedClients != null
     ? ` (${daemonInfo.attachedClients} client${daemonInfo.attachedClients === 1 ? "" : "s"})`
     : "";
-  return `${base} · persisted${clients}`;
+  const age = daemonInfo.startedAt ? formatAge(daemonInfo.startedAt) : undefined;
+  const upSuffix = age ? ` · up ${age}` : "";
+  return `${base} · persisted${clients}${upSuffix}`;
 }
 
 function tooltipFor(s: SandySandbox, badge: SandboxBadge, daemonInfo?: DaemonInfo): string {
@@ -208,6 +210,10 @@ function tooltipFor(s: SandySandbox, badge: SandboxBadge, daemonInfo?: DaemonInf
   if (daemonInfo) {
     lines.push(`Daemon:    persisted session — survives VSCode restarts`);
     if (daemonInfo.attachedClients != null) lines.push(`Clients:   ${daemonInfo.attachedClients} attached`);
+    if (daemonInfo.startedAt) {
+      const age = formatAge(daemonInfo.startedAt);
+      if (age) lines.push(`Up:        ${age} (since ${daemonInfo.startedAt})`);
+    }
   }
   return lines.join("\n");
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { deriveBadge, daemonInfoFor, SandboxBadge } from "../src/state/badge";
+import { deriveBadge, daemonInfoFor, formatAge, findLongRunners, SandboxBadge } from "../src/state/badge";
 import type { SandySandbox, SandyRunningContainer } from "../src/state/types";
 
 const NOW = new Date("2026-04-27T12:00:00Z");
@@ -177,5 +177,116 @@ describe("daemonInfoFor", () => {
 
   it("returns undefined when runningContainers is empty", () => {
     expect(daemonInfoFor("myproj-abc12345", [])).toBeUndefined();
+  });
+});
+
+describe("formatAge", () => {
+  it("returns undefined for an unparseable date", () => {
+    expect(formatAge("not-a-date", NOW)).toBeUndefined();
+  });
+
+  it("returns '<1m' for a future date (clock skew)", () => {
+    const future = new Date(NOW.getTime() + 5 * 60_000).toISOString();
+    expect(formatAge(future, NOW)).toBe("<1m");
+  });
+
+  it("returns '<1m' for less than 60s ago", () => {
+    const started = new Date(NOW.getTime() - 30_000).toISOString();
+    expect(formatAge(started, NOW)).toBe("<1m");
+  });
+
+  it("returns '1m' at exactly the 60s boundary", () => {
+    const started = new Date(NOW.getTime() - 60_000).toISOString();
+    expect(formatAge(started, NOW)).toBe("1m");
+  });
+
+  it("returns minutes below the 60m boundary", () => {
+    const started = new Date(NOW.getTime() - 59 * 60_000).toISOString();
+    expect(formatAge(started, NOW)).toBe("59m");
+  });
+
+  it("returns '1h' at exactly the 60m boundary", () => {
+    const started = new Date(NOW.getTime() - 60 * 60_000).toISOString();
+    expect(formatAge(started, NOW)).toBe("1h");
+  });
+
+  it("returns hours below the 48h boundary", () => {
+    const started = new Date(NOW.getTime() - 47 * 60 * 60_000).toISOString();
+    expect(formatAge(started, NOW)).toBe("47h");
+  });
+
+  it("returns '2d' at exactly the 48h boundary", () => {
+    const started = new Date(NOW.getTime() - 48 * 60 * 60_000).toISOString();
+    expect(formatAge(started, NOW)).toBe("2d");
+  });
+
+  it("returns days for multi-day ages, floored", () => {
+    const started = new Date(NOW.getTime() - 100 * 60 * 60_000).toISOString();
+    expect(formatAge(started, NOW)).toBe("4d");
+  });
+
+  it("defaults `now` to the current time when omitted", () => {
+    const started = new Date(Date.now() - 5 * 60_000).toISOString();
+    expect(formatAge(started)).toBe("5m");
+  });
+});
+
+describe("findLongRunners", () => {
+  const daemonContainer = (
+    sandbox: string,
+    startedAt: string | undefined,
+    overrides: Partial<SandyRunningContainer> = {},
+  ): SandyRunningContainer => ({
+    id: "deadbeef", sandbox, name: `sandy_${sandbox}_42`, daemon: true, started_at: startedAt, ...overrides,
+  });
+
+  it("returns [] when containers is null (docker unreachable)", () => {
+    expect(findLongRunners(null, [], 24, NOW)).toEqual([]);
+  });
+
+  it("excludes containers younger than the threshold", () => {
+    const c = daemonContainer("myproj-abc12345", new Date(NOW.getTime() - 2 * 60 * 60_000).toISOString());
+    expect(findLongRunners([c], [sb()], 24, NOW)).toEqual([]);
+  });
+
+  it("excludes a container exactly at the threshold (strictly greater-than)", () => {
+    const c = daemonContainer("myproj-abc12345", new Date(NOW.getTime() - 24 * 60 * 60_000).toISOString());
+    expect(findLongRunners([c], [sb()], 24, NOW)).toEqual([]);
+  });
+
+  it("includes containers older than the threshold", () => {
+    const c = daemonContainer("myproj-abc12345", new Date(NOW.getTime() - 30 * 60 * 60_000).toISOString());
+    const result = findLongRunners([c], [sb()], 24, NOW);
+    expect(result).toEqual([{ sandboxName: "myproj-abc12345", workspacePath: "/Users/x/dev/myproj", age: "30h" }]);
+  });
+
+  it("excludes non-daemon containers even if old", () => {
+    const c = daemonContainer("myproj-abc12345", new Date(NOW.getTime() - 30 * 60 * 60_000).toISOString(), { daemon: false });
+    expect(findLongRunners([c], [sb()], 24, NOW)).toEqual([]);
+  });
+
+  it("excludes containers with unparseable started_at", () => {
+    const c = daemonContainer("myproj-abc12345", "not-a-date");
+    expect(findLongRunners([c], [sb()], 24, NOW)).toEqual([]);
+  });
+
+  it("excludes containers with no started_at", () => {
+    const c = daemonContainer("myproj-abc12345", undefined);
+    expect(findLongRunners([c], [sb()], 24, NOW)).toEqual([]);
+  });
+
+  it("joins workspacePath by sandbox name; leaves it undefined when no sandbox matches", () => {
+    const c = daemonContainer("unknown-sandbox", new Date(NOW.getTime() - 30 * 60 * 60_000).toISOString());
+    const result = findLongRunners([c], [sb()], 24, NOW);
+    expect(result).toEqual([{ sandboxName: "unknown-sandbox", workspacePath: undefined, age: "30h" }]);
+  });
+
+  it("returns multiple entries when multiple daemon containers exceed threshold", () => {
+    const c1 = daemonContainer("myproj-abc12345", new Date(NOW.getTime() - 30 * 60 * 60_000).toISOString());
+    const c2 = daemonContainer("other-sandbox", new Date(NOW.getTime() - 50 * 60 * 60_000).toISOString());
+    const other = sb({ name: "other-sandbox", workspace_path: "/Users/x/dev/other" });
+    const result = findLongRunners([c1, c2], [sb(), other], 24, NOW);
+    expect(result).toHaveLength(2);
+    expect(result.map(r => r.sandboxName)).toEqual(["myproj-abc12345", "other-sandbox"]);
   });
 });

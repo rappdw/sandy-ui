@@ -11,7 +11,7 @@ import { StatePoller } from "./state/poller";
 import { pollCadence } from "./state/cadence";
 import { deleteSandboxDir, removeLockForSandbox, lockPathForSandbox } from "./state/deleteSandbox";
 import { invalidateSandyPathCache, resolveSandyBinary } from "./state/sandyPath";
-import { daemonInfoFor } from "./state/badge";
+import { daemonInfoFor, findLongRunners, formatAge } from "./state/badge";
 import { pruneOrphansArgs, stopArgs, STOP_EXIT } from "./daemon/contract";
 import { PtySupervisor, Session } from "./terminal/supervisor";
 import { runSynthkitCommand } from "./synthkit/commands";
@@ -79,11 +79,21 @@ export function activate(ctx: vscode.ExtensionContext) {
       + (detachedTotal > 0 ? ` ($(eye-closed) ${detachedTotal} detached)` : "");
     statusBar.tooltip = [
       ...sessions.map(s => `${s.workspacePath}  •  ${s.panel ? "attached" : "detached"}  •  pid=${s.pty.pid}`),
-      ...persisted.map(({ ws, c }) => `${ws}  •  persisted  •  ${c.attached_clients ?? "?"} client(s)`),
+      ...persisted.map(({ ws, c }) => {
+        const age = c.started_at ? formatAge(c.started_at) : undefined;
+        return `${ws}  •  persisted  •  ${c.attached_clients ?? "?"} client(s)` + (age ? ` · up ${age}` : "");
+      }),
     ].join("\n");
     statusBar.show();
   };
   refreshStatusBar();
+
+  // Long-running-session nudge (rappdw/sandy-ui#26): at most once per window
+  // session, notify about persisted daemon sessions older than
+  // sandy.longRunningSessionHours (0 disables). Deliberately a plain local —
+  // not globalState — so a fresh VSCode window nudges again; the goal is
+  // "don't nag repeatedly within one long-lived window", not "ever".
+  let longRunnerNudged = false;
 
   // Honor a pending launch from a previous-window tree click. When the user
   // clicks a tree item for a different workspace, we openFolder (which
@@ -102,6 +112,38 @@ export function activate(ctx: vscode.ExtensionContext) {
     // the bar needs to react to poll results too, not just local spawn/
     // attach/detach/exit events.
     poller.onDidChange(refreshStatusBar),
+    // Long-running-session nudge — see longRunnerNudged declaration above.
+    // Reads the threshold at fire time (not cached) so a mid-session
+    // settings change takes effect on the next poll without a reload.
+    poller.onDidChange((res) => {
+      const threshold = vscode.workspace.getConfiguration("sandy").get<number>("longRunningSessionHours", 24);
+      if (threshold <= 0 || longRunnerNudged || !res.state) return;
+      const longRunners = findLongRunners(res.state.running_containers, res.state.sandboxes ?? [], threshold);
+      if (longRunners.length === 0) return;
+      longRunnerNudged = true;
+      if (longRunners.length === 1) {
+        const r = longRunners[0];
+        const label = path.basename(r.workspacePath ?? r.sandboxName);
+        const actions = r.workspacePath ? ["Attach", "Stop"] : ["Stop"];
+        void vscode.window.showInformationMessage(
+          `Sandy: session for ${label} has been running ${r.age}.`,
+          ...actions,
+        ).then((choice) => {
+          if (choice === "Attach" && r.workspacePath) {
+            void vscode.commands.executeCommand("sandy.launch", { workspacePath: r.workspacePath });
+          } else if (choice === "Stop") {
+            void vscode.commands.executeCommand("sandy.tree.stop", { sandbox: { name: r.sandboxName, workspace_path: r.workspacePath } });
+          }
+        });
+      } else {
+        void vscode.window.showInformationMessage(
+          `Sandy: ${longRunners.length} persisted sessions running longer than ${threshold}h.`,
+          "Show Sessions",
+        ).then((choice) => {
+          if (choice === "Show Sessions") void vscode.commands.executeCommand("sandy.statusbar.click");
+        });
+      }
+    }),
     // If the user updates sandy.binaryPath at runtime, invalidate the
     // resolver cache and trigger a state refresh so the new value is used.
     vscode.workspace.onDidChangeConfiguration(e => {

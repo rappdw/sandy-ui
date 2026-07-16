@@ -259,6 +259,22 @@
           "type": "boolean",
           "default": true,
           "description": "Use sandy's daemon mode (sandy >= 1.1.0) so sessions survive VSCode restarts: closing a tab or quitting VSCode detaches instead of stopping; stop explicitly via the tree/status-bar Stop action. Off = legacy lifecycle (closing the tab stops sandy). Ignored when the installed sandy lacks daemon support."
+        },
+        "sandy.longRunningSessionHours": {
+          "type": "number",
+          "default": 24,
+          "minimum": 0,
+          "description": "Threshold in hours for a once-per-window notification about long-running persisted sessions. 0 disables."
+        },
+        "sandy.terminal.mouseMode": {
+          "type": "string",
+          "enum": ["nativeSelection", "tmux"],
+          "enumDescriptions": [
+            "Drag selects text natively; wheel is forwarded to tmux; in-app mouse clicks are not delivered (hold ⌥ never needed).",
+            "tmux owns the mouse: in-app clicks and pane interactions work; text selection requires ⌥ (Option) drag."
+          ],
+          "default": "nativeSelection",
+          "description": "Applies live to running terminals."
         }
       }
     }

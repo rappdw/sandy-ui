@@ -29,7 +29,8 @@ type FromHost =
   | { type: "data"; data: string }
   | { type: "exit"; code: number }
   | { type: "refit" }
-  | { type: "scrollSensitivity"; value: number };
+  | { type: "scrollSensitivity"; value: number }
+  | { type: "mouseMode"; value: string };
 
 // ---------------------------------------------------------------------------
 
@@ -56,6 +57,25 @@ type FromHost =
   // 1 = the tuned defaults below; >1 scrolls faster, <1 finer. The host posts
   // the current value on launch and again whenever the setting changes.
   let scrollSensitivity = 1;
+
+  // sandy.terminal.mouseMode (sandy-ui#29). "nativeSelection" (default) is
+  // the split-mouse behavior described in the big comment below: we
+  // intercept tmux's mouse-tracking DECSET/DECRST so drag always selects
+  // natively. "tmux" disables that interception — tmux gets real mouse
+  // tracking back (in-app clicks/pane interactions work) at the cost of
+  // needing ⌥-drag to select. Declared here (not inside the split-mouse
+  // try-block below) because both the CSI handlers AND the "mouseMode"
+  // message case below need to read/write it and swallowedModes.
+  let mouseMode: "nativeSelection" | "tmux" = "nativeSelection";
+
+  // Tracking-mode codes (subset of MOUSE_TRACKING_MODES, defined below) that
+  // are CURRENTLY swallowed — i.e. tmux believes it turned them on, but we
+  // intercepted the DECSET and never told xterm. Mirrors tmux's belief about
+  // its own mouse state, independent of mouseMode. Used to replay that state
+  // into (or out of) xterm when the user flips mouseMode live, so the switch
+  // takes effect immediately rather than waiting for tmux to renegotiate.
+  const swallowedModes = new Set<number>();
+
   const log = (...args: unknown[]) => {
     try { console.log("[bridge]", ...args); } catch { /* swallow */ }
     try { post({ type: "log", level: "info", msg: args.map(String).join(" ") }); } catch { /* swallow */ }
@@ -279,9 +299,17 @@ type FromHost =
     // Previously a mixed sequence passed through whole and quietly re-enabled
     // mouse tracking, breaking native selection (review finding B10).
     const makeDecModeHandler = (final: "h" | "l") => (params: (number | number[])[]): boolean => {
+      // tmux mode (sandy.terminal.mouseMode): pass everything through
+      // untouched — no swallowing, no rewriting — so xterm's own DECSET/
+      // DECRST handling runs and its tracking state actually governs.
+      // appWantsMouse is deliberately left alone here: it only means
+      // anything in native mode's wheel-forwarding decision below.
+      if (mouseMode === "tmux") return false;
       const { tracking, rest } = splitModes(params);
       if (tracking.length === 0) return false;  // nothing of ours — xterm handles it
       appWantsMouse = final === "h";
+      if (final === "h") tracking.forEach((c) => swallowedModes.add(c));
+      else tracking.forEach((c) => swallowedModes.delete(c));
       if (rest.length > 0) term.write(`\x1b[?${rest.join(";")}${final}`);
       return true;
     };
@@ -311,6 +339,10 @@ type FromHost =
       // Pure-horizontal events (deltaY 0) aren't ours: don't inject, don't
       // reset the vertical bank — just let xterm ignore them (finding B11).
       if (ev.deltaY === 0) return true;
+      // tmux mode: xterm forwards the wheel itself when the app enabled
+      // tracking (its own DECSET handling ran, unlike native mode where we
+      // swallowed the enable) — don't also inject from here.
+      if (mouseMode === "tmux") return true;
       if (!appWantsMouse) return true;
       // Within the post-selection guard window: swallow without injecting or
       // clearing, so releasing a selection never scrolls or drops it.
@@ -489,6 +521,37 @@ type FromHost =
       if (typeof m.value === "number" && isFinite(m.value)) {
         scrollSensitivity = m.value;
         log("scrollSensitivity =", scrollSensitivity);
+      }
+    } else if (m.type === "mouseMode") {
+      if (m.value !== "nativeSelection" && m.value !== "tmux") {
+        log("mouseMode: ignoring invalid value", m.value);
+      } else if (m.value !== mouseMode) {
+        const prev = mouseMode;
+        // Set BEFORE the replay below — the replay's "h" vs "l" choice
+        // reads mouseMode, and makeDecModeHandler/the wheel handler must
+        // see the new mode for anything that arrives after this point.
+        mouseMode = m.value;
+        // Replay swallowedModes (the tracking codes tmux currently
+        // believes it turned on) into xterm so the switch takes effect on
+        // THIS terminal immediately. Without this, a mid-session switch
+        // would do nothing until tmux happened to renegotiate mouse modes
+        // on its own (e.g. next redraw/resize DECSET) — the user would
+        // flip the setting and see no change until then.
+        //   - switching TO tmux: tell xterm those modes are ON (xterm was
+        //     never told — we swallowed the original enable), so clicks
+        //     start forwarding right away. 1006/SGR encoding was never
+        //     swallowed in the first place, so xterm already has it.
+        //   - switching TO nativeSelection: tell xterm those modes are
+        //     OFF, so it stops forwarding and native selection resumes;
+        //     our interception resumes for any future enable.
+        // swallowedModes itself is left untouched by the replay — it
+        // mirrors what tmux wants, which hasn't changed; only xterm's
+        // belief about its own state has.
+        if (swallowedModes.size > 0) {
+          const codes = [...swallowedModes].join(";");
+          term.write(`\x1b[?${codes}${mouseMode === "tmux" ? "h" : "l"}`);
+        }
+        log(`mouseMode: ${prev} -> ${mouseMode}`);
       }
     }
   });
