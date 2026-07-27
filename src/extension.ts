@@ -11,7 +11,7 @@ import { StatePoller } from "./state/poller";
 import { pollCadence } from "./state/cadence";
 import { deleteSandboxDir, removeLockForSandbox, lockPathForSandbox } from "./state/deleteSandbox";
 import { invalidateSandyPathCache, resolveSandyBinary } from "./state/sandyPath";
-import { daemonInfoFor, findLongRunners, formatAge } from "./state/badge";
+import { daemonInfoFor, findLongRunners, formatAge, persistedSessionForWorkspace } from "./state/badge";
 import { pruneOrphansArgs, stopArgs, STOP_EXIT } from "./daemon/contract";
 import { PtySupervisor, Session } from "./terminal/supervisor";
 import { runSynthkitCommand } from "./synthkit/commands";
@@ -111,6 +111,13 @@ export function activate(ctx: vscode.ExtensionContext) {
   // runtime), matching the existing "let sandy handle it" precedent used for
   // --validate-config failures.
   void runCompatCheck(ctx, stateOut);
+
+  // Opt-in auto-restore of persisted daemon sessions on window open
+  // (rappdw/sandy-ui#32). Fired AFTER resumePendingLaunchIfAny and
+  // runCompatCheck above, on purpose: a pending cross-window launch marker
+  // must win over auto-restore (see maybeRestoreSession's own guard for
+  // why "after" isn't even load-bearing on its own — belt and suspenders).
+  void maybeRestoreSession(ctx, poller, stateOut);
 
   ctx.subscriptions.push(
     poller,
@@ -544,38 +551,46 @@ async function launchWithWorkspaceSwitch(
 // ---------------------------------------------------------------------------
 
 async function runCompatCheck(ctx: vscode.ExtensionContext, out: vscode.OutputChannel): Promise<void> {
-  const res = await getCachedSchema(ctx.globalStorageUri.fsPath, schemaMock as Schema);
-  const verdict = evaluateCompat(res.sandy_version, res.schema_version);
+  // (batch-1 verify A2) getCachedSchema can't reject in practice — it always
+  // resolves to a usable schema, falling back to the bundled mock on error —
+  // but an activation-path floating rejection is a needless risk to leave on
+  // the table. Log-only; never blocks activation.
+  try {
+    const res = await getCachedSchema(ctx.globalStorageUri.fsPath, schemaMock as Schema);
+    const verdict = evaluateCompat(res.sandy_version, res.schema_version);
 
-  out.appendLine(
-    `[${new Date().toISOString()}] compat check: sandy=${res.sandy_version ?? "(not found)"} `
-    + `schema=${res.schema_version ?? "?"} verdict=${verdict.kind} `
-    + `(declared floor: sandy >= ${SANDY_MIN_VERSION}, schema in [${SUPPORTED_SCHEMA_VERSIONS.join(", ")}])`
-  );
-
-  if (verdict.kind === "too-old" || verdict.kind === "schema-unsupported-major") {
-    vscode.window.showErrorMessage(`Sandy: ${describeVerdict(verdict).message}`);
-  } else if (verdict.kind === "schema-too-new") {
-    vscode.window.showWarningMessage(`Sandy: ${describeVerdict(verdict).message}`);
-  }
-  // "sandy-missing"/"ok" — nothing to surface here; a missing sandy already
-  // gets its own fallback UX (tree placeholder, settings banner).
-
-  // Loud mock-schema fallback (rappdw/sandy-ui#30): sandy IS present (we got
-  // a version) but --print-schema itself failed, so settings render against
-  // the bundled mock rather than this sandy's real schema — the settings
-  // form can silently drift from what this sandy actually accepts. The
-  // settings panel already shows a banner for this case (see
-  // src/settings/webviewPanel.ts); this is the activation-time surface for
-  // anyone who never opens Settings. Simpler one-time-warning path chosen
-  // over threading a schemaSourceProvider into ProjectsTreeProvider for a
-  // dedicated tree node — the settings banner remains the primary, detailed
-  // surface either way.
-  if (res.source === "fallback" && res.sandy_version) {
-    vscode.window.showWarningMessage(
-      `Sandy: sandy is installed but --print-schema failed — using the bundled mock schema. `
-      + `Settings may not match your sandy version. See the "Sandy Settings" output channel for details.`
+    out.appendLine(
+      `[${new Date().toISOString()}] compat check: sandy=${res.sandy_version ?? "(not found)"} `
+      + `schema=${res.schema_version ?? "?"} verdict=${verdict.kind} `
+      + `(declared floor: sandy >= ${SANDY_MIN_VERSION}, schema in [${SUPPORTED_SCHEMA_VERSIONS.join(", ")}])`
     );
+
+    if (verdict.kind === "too-old" || verdict.kind === "schema-unsupported-major") {
+      vscode.window.showErrorMessage(`Sandy: ${describeVerdict(verdict).message}`);
+    } else if (verdict.kind === "schema-too-new") {
+      vscode.window.showWarningMessage(`Sandy: ${describeVerdict(verdict).message}`);
+    }
+    // "sandy-missing"/"ok" — nothing to surface here; a missing sandy already
+    // gets its own fallback UX (tree placeholder, settings banner).
+
+    // Loud mock-schema fallback (rappdw/sandy-ui#30): sandy IS present (we got
+    // a version) but --print-schema itself failed, so settings render against
+    // the bundled mock rather than this sandy's real schema — the settings
+    // form can silently drift from what this sandy actually accepts. The
+    // settings panel already shows a banner for this case (see
+    // src/settings/webviewPanel.ts); this is the activation-time surface for
+    // anyone who never opens Settings. Simpler one-time-warning path chosen
+    // over threading a schemaSourceProvider into ProjectsTreeProvider for a
+    // dedicated tree node — the settings banner remains the primary, detailed
+    // surface either way.
+    if (res.source === "fallback" && res.sandy_version) {
+      vscode.window.showWarningMessage(
+        `Sandy: sandy is installed but --print-schema failed — using the bundled mock schema. `
+        + `Settings may not match your sandy version. See the "Sandy Settings" output channel for details.`
+      );
+    }
+  } catch (e: any) {
+    out.appendLine(`[${new Date().toISOString()}] compat check failed: ${e?.message ?? e}`);
   }
 }
 
@@ -608,4 +623,79 @@ async function resumePendingLaunchIfAny(
   setTimeout(() => {
     void vscode.commands.executeCommand("sandy.launch", { workspacePath: pending.workspace });
   }, 500);
+}
+
+// ---------------------------------------------------------------------------
+// Auto-restore on window open (rappdw/sandy-ui#32). Opt-in convenience: the
+// reverse of detach-on-quit — if THIS workspace already has a persisted sandy
+// daemon session running on the host (sandy >= 1.1.0, sandy.persistSessions
+// on), reopen the Sandy tab attached to it automatically instead of making
+// the user click. Defaults OFF and is a strict no-op when unset (step 1's
+// gate returns before touching anything else — no poll, no command).
+//
+// FORWARD-COMPAT SEAM (rappdw/sandy-ui#31, walkthrough not built yet): once
+// the first-run walkthrough lands, it should set a globalState marker while
+// first-run is active, and this function should early-return while it's set
+// — auto-restore must never race the first-run experience. Nothing sets
+// that marker today, so there is deliberately no check for it yet; adding
+// one now would be inert plumbing for a feature that doesn't exist.
+// ---------------------------------------------------------------------------
+
+async function maybeRestoreSession(
+  ctx: vscode.ExtensionContext,
+  poller: StatePoller,
+  out: vscode.OutputChannel,
+): Promise<void> {
+  const cfg = vscode.workspace.getConfiguration("sandy");
+  const restoreEnabled = cfg.get<boolean>("restoreSessionsOnStartup", false);
+  const persistEnabled = cfg.get<boolean>("persistSessions", true);
+  if (!restoreEnabled || !persistEnabled) return;
+
+  // Never folder-pick on startup — that would be a surprising modal on every
+  // window open. Nothing to restore against without a workspace anyway.
+  const currentWs = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!currentWs) return;
+
+  // No double-open, guard 1: a pending cross-window launch marker targeting
+  // THIS workspace means resumePendingLaunchIfAny already owns firing
+  // sandy.launch for it (it clears the marker itself — read-only here).
+  const pending = ctx.globalState.get<PendingLaunch>(PENDING_LAUNCH_KEY);
+  if (pending && pending.workspace === currentWs && (Date.now() - pending.at) <= PENDING_LAUNCH_TTL_MS) {
+    out.appendLine(`[${new Date().toISOString()}] auto-restore: skipping ${currentWs} — pending launch marker already owns it`);
+    return;
+  }
+
+  // No double-open, guard 2: this extension host already has a live session
+  // for the workspace. sandy.launch's own reveal guard would no-op anyway,
+  // but skip early rather than round-tripping through it.
+  if (supervisor?.getSession(currentWs)) return;
+
+  // Best-effort bounded wait for --print-state to be ready: on cold
+  // activation poller.current() may still be the t=0 empty state. One
+  // refresh, and if that doesn't turn up a hit, one short re-check — not a
+  // hard guarantee (docker can be slow to answer), so we don't retry
+  // forever. If state still isn't ready, skip silently; the user can still
+  // click.
+  const checkOnce = (): boolean => {
+    const state = poller.current().state;
+    return !!persistedSessionForWorkspace(state?.running_containers ?? null, state?.sandboxes ?? [], currentWs);
+  };
+
+  await poller.refresh();
+  let hit = checkOnce();
+  if (!hit) {
+    await new Promise<void>(resolve => setTimeout(resolve, 1_500));
+    await poller.refresh();
+    hit = checkOnce();
+  }
+  if (!hit) return;
+
+  // Single-window discipline: guards 1+2 above (plus sandy.launch's own
+  // reveal guard) cover intra-instance dupes. Two VSCode windows open on the
+  // SAME workspace both auto-restoring is the one real risk left, but that's
+  // the same last-attach-wins territory daemon mode already defines (a
+  // second attach displaces the first cleanly) — deliberately not adding
+  // cross-window locking for an already-unusual scenario.
+  out.appendLine(`[${new Date().toISOString()}] auto-restored persisted session for ${currentWs}`);
+  await vscode.commands.executeCommand("sandy.launch", { workspacePath: currentWs });
 }

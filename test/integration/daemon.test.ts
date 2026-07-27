@@ -258,4 +258,39 @@ describe("Daemon lifecycle (fake-sandy)", function () {
     await vscode.commands.executeCommand("sandy.tree.stop", { sandbox: { name: sandboxName, workspace_path: ws } });
     await closeSandyTabs();
   });
+
+  it("7. restoreSessionsOnStartup default OFF: a persisted session present does not auto-open a tab", async () => {
+    // maybeRestoreSession (rappdw/sandy-ui#32) only runs once, at extension
+    // activation — which already happened in `before()`, long before this
+    // test exists. Re-triggering activation isn't available from a single
+    // extension-host test (no API to deactivate + reactivate an installed
+    // extension mid-suite). So this is a light architectural sanity check,
+    // not a re-exercise of the gate itself: confirm the setting's registered
+    // default is really false (guards against an accidental default-on
+    // regression), and confirm no Sandy tab spontaneously reopens for this
+    // workspace while a persisted session exists and the setting is off.
+    // The real behavioral coverage for the join/gate lives in the pure
+    // persistedSessionForWorkspace unit tests (test/state-badge.test.ts).
+    const inspected = vscode.workspace.getConfiguration("sandy").inspect<boolean>("restoreSessionsOnStartup");
+    assert.equal(inspected?.defaultValue, false, "sandy.restoreSessionsOnStartup must default to false");
+
+    // Establish a persisted daemon session (launch, then detach) so there's
+    // something an auto-restore COULD attach to if it were wrongly firing.
+    await vscode.commands.executeCommand("sandy.launch");
+    await until(() => {
+      const lines = invocations();
+      return lines.includes(`--start --workspace ${ws}`) && lines.includes(`--attach --workspace ${ws}`);
+    }, 15_000);
+    await until(() => sessionExists(sandboxName) && readSession(sandboxName).attached_clients === 1, 10_000);
+    await closeSandyTabs();
+    await until(() => sessionExists(sandboxName) && readSession(sandboxName).attached_clients === 0, 10_000);
+
+    await sleep(2_000);
+    assert.equal(sandyTabs().length, 0, "no Sandy tab should auto-open when restoreSessionsOnStartup is off (default)");
+
+    // Teardown: stop the persisted session so it doesn't leak into other tests.
+    await vscode.commands.executeCommand("sandy.state.refresh");
+    await vscode.commands.executeCommand("sandy.tree.stop", { sandbox: { name: sandboxName, workspace_path: ws } });
+    await until(() => !sessionExists(sandboxName), 10_000);
+  });
 });

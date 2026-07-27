@@ -269,6 +269,11 @@
           "minimum": 0,
           "description": "Threshold in hours for a once-per-window notification about long-running persisted sessions. 0 disables."
         },
+        "sandy.restoreSessionsOnStartup": {
+          "type": "boolean",
+          "default": false,
+          "description": "On opening a workspace, if it has a persisted sandy daemon session running on the host, automatically reopen the Sandy tab attached to it (the reverse of detach-on-quit). Off by default; requires sandy.persistSessions and sandy >= 1.1.0 daemon mode."
+        },
         "sandy.terminal.mouseMode": {
           "type": "string",
           "enum": ["nativeSelection", "tmux"],

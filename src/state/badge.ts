@@ -66,6 +66,28 @@ export function daemonInfoFor(
   return { attachedClients: c.attached_clients ?? null, startedAt: c.started_at };
 }
 
+/**
+ * The daemon container backing a persisted session for a given workspace
+ * path, or undefined when none. Joins running_containers -> sandbox name ->
+ * workspace_path, same shape as the inline join extension.ts's status bar
+ * and tree already do (`state.running_containers.filter(daemon).map(...
+ * sandboxes.find...)`) — factored out here so the join is unit-testable and
+ * shared (rappdw/sandy-ui#32 auto-restore uses it to decide whether there's
+ * anything to reattach to on window open).
+ */
+export function persistedSessionForWorkspace(
+  runningContainers: SandyRunningContainer[] | null,
+  sandboxes: SandySandbox[],
+  workspacePath: string,
+): SandyRunningContainer | undefined {
+  if (!runningContainers) return undefined;
+  return runningContainers.find(c => {
+    if (c.daemon !== true) return false;
+    const ws = sandboxes.find(sb => sb.name === c.sandbox)?.workspace_path;
+    return ws === workspacePath;
+  });
+}
+
 function parseIsoDate(s: string): Date | null {
   const d = new Date(s);
   return isNaN(d.getTime()) ? null : d;

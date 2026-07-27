@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { deriveBadge, daemonInfoFor, formatAge, findLongRunners, SandboxBadge } from "../src/state/badge";
+import { deriveBadge, daemonInfoFor, formatAge, findLongRunners, persistedSessionForWorkspace, SandboxBadge } from "../src/state/badge";
 import type { SandySandbox, SandyRunningContainer } from "../src/state/types";
 
 const NOW = new Date("2026-04-27T12:00:00Z");
@@ -228,6 +228,54 @@ describe("formatAge", () => {
   it("defaults `now` to the current time when omitted", () => {
     const started = new Date(Date.now() - 5 * 60_000).toISOString();
     expect(formatAge(started)).toBe("5m");
+  });
+});
+
+describe("persistedSessionForWorkspace", () => {
+  it("returns undefined when runningContainers is null (docker unreachable)", () => {
+    expect(persistedSessionForWorkspace(null, [sb()], "/Users/x/dev/myproj")).toBeUndefined();
+  });
+
+  it("returns undefined when runningContainers is empty", () => {
+    expect(persistedSessionForWorkspace([], [sb()], "/Users/x/dev/myproj")).toBeUndefined();
+  });
+
+  it("returns the container when a daemon container's sandbox joins to the target workspace_path", () => {
+    const c: SandyRunningContainer = { id: "1", sandbox: "myproj-abc12345", daemon: true, attached_clients: 0 };
+    expect(persistedSessionForWorkspace([c], [sb()], "/Users/x/dev/myproj")).toBe(c);
+  });
+
+  it("returns undefined when the matching sandbox's workspace_path differs from the target", () => {
+    const c: SandyRunningContainer = { id: "1", sandbox: "myproj-abc12345", daemon: true };
+    expect(persistedSessionForWorkspace([c], [sb()], "/Users/x/dev/other")).toBeUndefined();
+  });
+
+  it("returns undefined when the container isn't a daemon session", () => {
+    const c: SandyRunningContainer = { id: "1", sandbox: "myproj-abc12345", daemon: false };
+    expect(persistedSessionForWorkspace([c], [sb()], "/Users/x/dev/myproj")).toBeUndefined();
+  });
+
+  it("returns undefined when daemon is absent (pre-1.1.0 sandy)", () => {
+    const c: SandyRunningContainer = { id: "1", sandbox: "myproj-abc12345" };
+    expect(persistedSessionForWorkspace([c], [sb()], "/Users/x/dev/myproj")).toBeUndefined();
+  });
+
+  it("returns undefined when no sandbox matches the container's sandbox name (join fails)", () => {
+    const c: SandyRunningContainer = { id: "1", sandbox: "unknown-sandbox", daemon: true };
+    expect(persistedSessionForWorkspace([c], [sb()], "/Users/x/dev/myproj")).toBeUndefined();
+  });
+
+  it("returns undefined when the matching sandbox has no workspace_path at all", () => {
+    const orphan = sb({ name: "orphan-sandbox", workspace_path: undefined });
+    const c: SandyRunningContainer = { id: "1", sandbox: "orphan-sandbox", daemon: true };
+    expect(persistedSessionForWorkspace([c], [orphan], "/Users/x/dev/myproj")).toBeUndefined();
+  });
+
+  it("picks the right container among multiple", () => {
+    const other = sb({ name: "other-sandbox", workspace_path: "/Users/x/dev/other" });
+    const c1: SandyRunningContainer = { id: "1", sandbox: "myproj-abc12345", daemon: true };
+    const c2: SandyRunningContainer = { id: "2", sandbox: "other-sandbox", daemon: true };
+    expect(persistedSessionForWorkspace([c1, c2], [sb(), other], "/Users/x/dev/other")).toBe(c2);
   });
 });
 
