@@ -1,6 +1,7 @@
 import * as cp from "child_process";
 import * as fs from "fs";
 import { resolveSandyBinary } from "../state/sandyPath";
+import { parseSandyJson } from "../state/parseJson";
 
 // `sandy --validate-config PATH` JSON shape per SPEC_INTROSPECTION.md.
 // Optional fields wherever the spec allows additive change.
@@ -57,7 +58,7 @@ export function validateConfig(configPath: string): Promise<ValidateResolution> 
       // per the spec. Try to parse stdout regardless of err.
       let parsed: ValidateResult | undefined;
       if (stdout) {
-        try { parsed = JSON.parse(stdout) as ValidateResult; }
+        try { parsed = parseSandyJson<ValidateResult>(stdout); }
         catch { /* fall through to error reporting */ }
       }
       if (parsed) {

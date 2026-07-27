@@ -5,6 +5,7 @@ import type { Schema } from "../settings/configIO";
 import type { SandySchema } from "./types";
 import { parseSandySchema } from "./parse";
 import { resolveSandyBinary } from "../state/sandyPath";
+import { parseSandyJson } from "../state/parseJson";
 
 // Cache file lives in the extension's globalStorageUri.
 // Layout:
@@ -145,7 +146,7 @@ async function invokeSandyPrintSchema(): Promise<SandySchema> {
   const sandyBin = resolveSandyBinary();
   if (!sandyBin) throw new Error("sandy not found");
   const out = await execFileText(sandyBin, ["--print-schema"], 10_000);
-  return JSON.parse(out) as SandySchema;
+  return parseSandyJson<SandySchema>(out);
 }
 
 function tryReadCache(cachePath: string): CacheFile | undefined {
