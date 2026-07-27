@@ -17,6 +17,9 @@
     "Other"
   ],
   "main": "./out/extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
   "activationEvents": [
     "onStartupFinished"
   ],
