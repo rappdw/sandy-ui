@@ -202,15 +202,8 @@ export function activate(ctx: vscode.ExtensionContext) {
     // Palette + tree-default-click. If the target workspace differs from the
     // current one, we openFolder (reloads VSCode), persist a pending-launch
     // marker, and let resumePendingLaunchIfAny finish the job after reload.
-    vscode.commands.registerCommand("sandy.launch", (arg) => {
-      // First-run marker for the auto-restore gate (rappdw/sandy-ui#31,
-      // Part C): a profile that has never actually launched sandy shouldn't
-      // have restoreSessionsOnStartup auto-open a session on some later
-      // window open. This is also the walkthrough's firstLaunch step
-      // completion command, so it's set exactly when that step ticks off.
-      void ctx.globalState.update("sandy.hasLaunched", true);
-      return launchWithWorkspaceSwitch(ctx, arg?.workspacePath, stateOut);
-    }),
+    vscode.commands.registerCommand("sandy.launch", (arg) =>
+      launchWithWorkspaceSwitch(ctx, arg?.workspacePath, stateOut)),
     vscode.commands.registerCommand("sandy.walkthrough.open", () =>
       vscode.commands.executeCommand("workbench.action.openWalkthrough", "rappdw.sandy-ui#sandy.gettingStarted", false)
     ),
@@ -546,6 +539,13 @@ async function launchWithWorkspaceSwitch(
   out: vscode.OutputChannel,
 ): Promise<void> {
   if (!supervisor) return;  // not activated yet (shouldn't happen in practice)
+  // First-run marker for the auto-restore gate (rappdw/sandy-ui#31, Part C):
+  // a profile that has never actually launched sandy shouldn't have
+  // restoreSessionsOnStartup auto-open a session on a later window open. Set
+  // here — the common path for ALL launch entry points (sandy.launch,
+  // sandy.tree.launch, status-bar re-attach) — not just the sandy.launch
+  // command, so a tree-only user still flips it (batch-3 gap).
+  void ctx.globalState.update("sandy.hasLaunched", true);
   // No target — defer to openTerminalPanel which prompts for a folder.
   if (!targetWs) return openTerminalPanel(ctx, supervisor, undefined);
 
