@@ -74,18 +74,51 @@ npx electron-rebuild -f -w node-pty
 
 ## Running against a remote sandy (Remote-SSH)
 
-sandy-ui is a **workspace extension** (`extensionKind: workspace`), so in a VSCode **Remote-SSH** session the extension host — and therefore all of sandy-ui — runs on the **remote host**, driving *that* machine's sandy/docker/tmux. This gives you the full sandy-ui UX (session list, agent tab, file editing) pointed at a sandy running on an always-on server (e.g. a lab box or DGX), with the daemon session staying put on the server while your laptop is just a client.
+Run sandy on an always-on server (a lab box, a DGX) and drive it from your laptop with the full sandy-ui UX — session list, agent tab, file editing — the daemon session staying put on the server while the laptop is just a client.
 
-**One caveat — node-pty must match the remote's runtime.** The remote extension host runs under the **VS Code Server's bundled Node.js**, a *different* ABI than a local desktop VSCode's Electron. A prebuilt `.vsix` (built for a desktop Electron ABI) will fail with `posix_spawnp failed.` when installed into the remote host. Until platform-specific packaging lands ([#33](https://github.com/rappdw/sandy-ui/issues/33)), install sandy-ui **from source on the remote host**:
+This works because sandy-ui is a **workspace extension** (`extensionKind: workspace`): in a VSCode **Remote-SSH** session the extension host runs on the **remote host**, so sandy-ui invokes *that* machine's `sandy`/`docker`/`tmux`. From the extension's point of view everything is local — it just happens to be the server. sandy itself needs no changes.
+
+It's a bit fiddly to set up the first time. Steps:
+
+**1. Connect.** `Cmd+Shift+P` → **Remote-SSH: Connect to Host** → your server. Then **File → Open Folder** → the workspace on the server (the same path sandy runs against, e.g. `~/dev/foo`). The bottom-left badge should read **SSH: <host>**.
+
+**2. Build sandy-ui from source, on the server.** A prebuilt `.vsix` won't work here (see the node-pty note below), so build it in place. This step only writes to the server's disk, so run it in **any** shell on the server — a `mosh`/`ssh` session is actually best, since it survives network drops during the long `npm install`:
 
 ```bash
-# In the Remote-SSH window (terminal runs on the remote):
-git clone https://github.com/rappdw/sandy-ui && cd sandy-ui
-npm install && npm run compile        # builds node-pty for the server's Node
-# then F5 (Run Extension) in that remote window, or package + install-vsix there
+git clone https://github.com/rappdw/sandy-ui ~/dev/sandy-ui
+cd ~/dev/sandy-ui
+npm install          # builds node-pty against the server's Node
+npm run compile
+npm run package-vsix # produces sandy-ui-<version>.vsix
 ```
 
-sandy needs no changes — the extension talks to the remote's sandy the same way it talks to a local one. Full design + acceptance notes: [#37](https://github.com/rappdw/sandy-ui/issues/37).
+**3. Install into the *remote* extension host.** This is the one step that needs VSCode's plumbing — a plain `mosh`/`ssh` shell has no `code` CLI wired to the remote server. Pick one:
+
+- **From the VSCode UI (no terminal):** Extensions view → `⋯` menu → **Install from VSIX…** → pick the `.vsix` you just built on the server. *(Easiest — sidesteps the `code`-CLI question entirely.)*
+- **From the SSH:<host> integrated terminal:** `code --install-extension ~/dev/sandy-ui/sandy-ui-<version>.vsix --force` — here `code` *is* the remote server CLI, so it installs into the right host.
+- **Skip packaging — press F5** with `~/dev/sandy-ui` open in the Remote-SSH window: launches an Extension Development Host in the remote host directly.
+
+**4. Reload:** `Cmd+Shift+P` → **Developer: Reload Window**. The Sandy view should now list the server's sessions.
+
+### node-pty must match the remote's runtime
+
+The remote extension host runs under the **VS Code Server's bundled Node.js** — a *different* ABI than a local desktop VSCode's Electron, and possibly different from the server's *system* Node. If launching sandy fails with `posix_spawnp failed.`, rebuild node-pty against the server's node (in a server shell):
+
+```bash
+SERVER_NODE=$(find ~/.vscode-server -name node -type f -path '*/server/node' 2>/dev/null | head -1)
+[ -z "$SERVER_NODE" ] && SERVER_NODE=$(find ~/.vscode-server/bin -maxdepth 2 -name node -type f 2>/dev/null | head -1)
+cd ~/dev/sandy-ui/node_modules/node-pty
+npx node-gyp rebuild --nodedir="$(dirname "$SERVER_NODE")/.."
+cd ~/dev/sandy-ui && npm run package-vsix   # re-package, re-install (step 3)
+```
+
+Eliminating this rebuild is [#33](https://github.com/rappdw/sandy-ui/issues/33) (a prebuilt remote-server target). **`electron-rebuild` is the wrong tool remotely** — that targets Electron, the remote wants the server's Node ABI.
+
+### Gotcha: `jq` on `sandy --print-state` errors with `Invalid numeric literal`
+
+If a server-side manual check like `sandy --print-state | jq …` fails to parse, your shell is leaking a terminal-title escape (`ESC ] 0 ; … BEL`) onto stdout — a prompt/title hook writing to fd 1 instead of `/dev/tty`, which corrupts any redirected output. **sandy-ui itself is immune** (its poller tolerates this), so only manual `jq` pipelines are affected; strip it with `… | perl -pe 's/\e\][^\a]*\a//' | jq`. The real fix is shell-side (guard the title hook on `[[ -t 1 ]]` or write to `/dev/tty`).
+
+Full step-by-step with acceptance checks (attach, file round-trip, reconnection after a network bounce): [`docs/testing/remote-ssh-runbook.md`](docs/testing/remote-ssh-runbook.md). Design notes: [#37](https://github.com/rappdw/sandy-ui/issues/37).
 
 ## Architecture
 
