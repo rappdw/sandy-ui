@@ -717,8 +717,9 @@ async function resumePendingLaunchIfAny(
 // gate returns before touching anything else — no poll, no command).
 //
 // FIRST-RUN GATE (rappdw/sandy-ui#31, landed): auto-restore now defers to
-// first-run via the sandy.hasLaunched globalState marker, set once inside
-// the sandy.launch command registration in activate(). A fresh profile that
+// first-run via the sandy.hasLaunched globalState marker, set in
+// launchWithWorkspaceSwitch (the shared path for every launch entry point).
+// A fresh profile that
 // has never actually launched sandy never auto-restores, even if
 // restoreSessionsOnStartup is somehow already on (e.g. via Settings Sync) —
 // the walkthrough / an explicit first launch should come first, not a

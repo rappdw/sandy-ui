@@ -2,7 +2,7 @@
 
 VSCode extension that wraps the [sandy](https://github.com/rappdw/sandy) CLI — runs sandy as a webview-hosted terminal in the editor area, with schema-driven settings and pre-flight approval modals.
 
-> **Status**: 0.7.0, dogfooding for the author. Not yet on Marketplace / OpenVSX. Public distribution is gated on node-pty packaging (macOS TCC was reassessed down from blocker to onboarding note) — see [SPEC_SANDY_UI.md](SPEC_SANDY_UI.md) and [docs/SPIKE_RESULTS.md](docs/SPIKE_RESULTS.md) for the production roadmap.
+> **Status**: 0.8.0, dogfooding for the author. Not yet on Marketplace / OpenVSX. Public distribution is gated on node-pty packaging (macOS TCC was reassessed down from blocker to onboarding note) — see [SPEC_SANDY_UI.md](SPEC_SANDY_UI.md) and [docs/SPIKE_RESULTS.md](docs/SPIKE_RESULTS.md) for the production roadmap.
 
 ## What it gives you
 
@@ -27,7 +27,7 @@ VSCode extension that wraps the [sandy](https://github.com/rappdw/sandy) CLI —
 <!-- VERSION-PIN: update this URL whenever package.json version is bumped (see CLAUDE.md > "On every release") -->
 
 ```bash
-curl -L https://github.com/rappdw/sandy-ui/releases/download/v0.7.0/sandy-ui-0.7.0.vsix -o /tmp/sandy.vsix \
+curl -L https://github.com/rappdw/sandy-ui/releases/download/v0.8.0/sandy-ui-0.8.0.vsix -o /tmp/sandy.vsix \
   && code --install-extension /tmp/sandy.vsix
 # Then: Cmd+Shift+P → "Developer: Reload Window" in any open VSCode window
 ```
@@ -71,6 +71,21 @@ npx electron-rebuild -f -w node-pty
 - `sandy.persistSessions` — use sandy's daemon mode (sandy ≥ 1.1.0) so sessions survive VSCode restarts: closing a tab or quitting VSCode detaches instead of stopping; stop explicitly via the tree/status-bar Stop action (default: `true`). Off = legacy lifecycle (closing the tab stops sandy). Ignored when the installed sandy lacks daemon support — the extension itself only requires sandy ≥ 1.0. Setting `sandy.launchCommand` forces the legacy lifecycle regardless.
 - `sandy.longRunningSessionHours` — once per VSCode window, nudge about persisted sessions running longer than this many hours, with Attach/Stop actions (default: `24`; `0` disables).
 - `sandy.terminal.mouseMode` — `nativeSelection` (default): drag selects text natively, wheel forwards to tmux, in-app clicks aren't delivered. `tmux`: tmux owns the mouse (in-app clicks and pane interactions work); text selection needs ⌥-drag. Applies live to running terminals.
+
+## Running against a remote sandy (Remote-SSH)
+
+sandy-ui is a **workspace extension** (`extensionKind: workspace`), so in a VSCode **Remote-SSH** session the extension host — and therefore all of sandy-ui — runs on the **remote host**, driving *that* machine's sandy/docker/tmux. This gives you the full sandy-ui UX (session list, agent tab, file editing) pointed at a sandy running on an always-on server (e.g. a lab box or DGX), with the daemon session staying put on the server while your laptop is just a client.
+
+**One caveat — node-pty must match the remote's runtime.** The remote extension host runs under the **VS Code Server's bundled Node.js**, a *different* ABI than a local desktop VSCode's Electron. A prebuilt `.vsix` (built for a desktop Electron ABI) will fail with `posix_spawnp failed.` when installed into the remote host. Until platform-specific packaging lands ([#33](https://github.com/rappdw/sandy-ui/issues/33)), install sandy-ui **from source on the remote host**:
+
+```bash
+# In the Remote-SSH window (terminal runs on the remote):
+git clone https://github.com/rappdw/sandy-ui && cd sandy-ui
+npm install && npm run compile        # builds node-pty for the server's Node
+# then F5 (Run Extension) in that remote window, or package + install-vsix there
+```
+
+sandy needs no changes — the extension talks to the remote's sandy the same way it talks to a local one. Full design + acceptance notes: [#37](https://github.com/rappdw/sandy-ui/issues/37).
 
 ## Architecture
 
