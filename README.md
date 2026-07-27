@@ -20,6 +20,7 @@ VSCode extension that wraps the [sandy](https://github.com/rappdw/sandy) CLI —
 - Node 20+
 - Docker running (for sandy itself; the extension does not require it)
 - `sandy` on PATH (or `tmux` as a stand-in for testing without sandy)
+- Requires sandy ≥ 1.0.0 (config schema v1) — see [SPEC_SANDY_UI.md §Compatibility](SPEC_SANDY_UI.md#compatibility-with-sandy)
 
 ## Install (latest release)
 

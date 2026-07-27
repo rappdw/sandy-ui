@@ -37,6 +37,11 @@ export interface SchemaResolution {
   schema: Schema;
   source: "cache" | "fresh" | "fallback";
   sandy_version?: string;
+  // Real sandy's schema_version from the raw --print-schema payload — NOT
+  // the bundled mock's (deliberately absent on "fallback" resolutions, since
+  // the compat gate (rappdw/sandy-ui#30) must not evaluate the mock's
+  // version as if it were the installed sandy's).
+  schema_version?: number;
   error?: string;
 }
 
@@ -55,7 +60,12 @@ export async function getCachedSchema(globalStorageDir: string, fallbackMock: Sc
   const cachePath = path.join(globalStorageDir, CACHE_FILE_NAME);
   const cached = tryReadCache(cachePath);
   if (cached && cached.sandy_version === sandyVersion) {
-    return { schema: cached.parsed, source: "cache", sandy_version: sandyVersion };
+    return {
+      schema: cached.parsed,
+      source: "cache",
+      sandy_version: sandyVersion,
+      schema_version: cached.raw.schema_version,
+    };
   }
 
   // Stale or missing — refresh.
@@ -104,7 +114,7 @@ export async function refreshSchema(globalStorageDir: string, fallbackMock: Sche
     fs.renameSync(tmp, path.join(globalStorageDir, CACHE_FILE_NAME));
   } catch { /* cache write failure is non-fatal */ }
 
-  return { schema: parsed, source: "fresh", sandy_version: version };
+  return { schema: parsed, source: "fresh", sandy_version: version, schema_version: raw.schema_version };
 }
 
 // --- internals -------------------------------------------------------------

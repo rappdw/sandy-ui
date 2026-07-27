@@ -30,6 +30,8 @@
 #   knobs/version             — overrides --version output (and --print-schema's
 #                              sandy.version, numeric part extracted)
 #   knobs/no-daemon-flags     — presence-only; --print-schema omits daemon cli_flags
+#   knobs/schema-version      — numeric; --print-schema's schema_version (default 1) —
+#                              drives the sandy-ui compat gate (rappdw/sandy-ui#30)
 #   knobs/orphans             — numeric; --print-state's orphan_networks (default 0)
 #
 # Workspace -> session name is a pure function of the workspace path (no
@@ -150,9 +152,14 @@ cmd_print_schema() {
     cli_flags='[{"name":"--start"},{"name":"--attach"},{"name":"--stop"},{"name":"--prune-orphans"}]'
   fi
 
+  local schema_ver="1"
+  if [ -n "${FAKE_SANDY_STATE:-}" ] && [ -f "$FAKE_SANDY_STATE/knobs/schema-version" ]; then
+    schema_ver=$(cat "$FAKE_SANDY_STATE/knobs/schema-version")
+  fi
+
   cat <<JSON
 {
-  "schema_version": 1,
+  "schema_version": $schema_ver,
   "sandy": { "version": "$ver" },
   "config": {
     "privileged_keys": [

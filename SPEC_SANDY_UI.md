@@ -307,20 +307,23 @@ Running sandy-ui has the same privilege as running `sandy` directly from a shell
 
 ```json
 {
-  "ui_version": "0.1.0",
-  "sandy_min_version": "0.12.0",
+  "ui_version": "0.8.0",
+  "sandy_min_version": "1.0.0",
   "sandy_schema_versions_supported": [1]
 }
 ```
 
-On UI launch, the UI runs `sandy --print-schema` and:
+Enforced by `src/schema/compat.ts` — a pure `evaluateCompat(sandyVersion, schemaVersion)` gate (`SANDY_MIN_VERSION` / `SUPPORTED_SCHEMA_VERSIONS` are the single source of truth these consts are copied from) plus `describeVerdict()` for the human-facing message. `extension.ts` runs it once at activation against the same cached `--print-schema` resolution the settings panel uses:
 
-- **Schema version missing**: sandy is too old. Show upgrade prompt, refuse to launch.
-- **Schema version in `supported` list**: proceed.
-- **Schema version outside `supported`** (sandy newer than UI knows): show a soft warning: "This sandy (version X, schema Y) is newer than what sandy-ui Z was tested against (schema 1). Some features may not work. Upgrade sandy-ui to match." Allow proceeding with best-effort rendering of known fields.
-- **Sandy too new by a major schema jump** (e.g., sandy schema 3, UI supports 1): refuse launch, point to upgrade path.
+- **sandy not on PATH**: nothing extra here — already covered by the existing "sandy unavailable" tree/settings fallback UX.
+- **sandy older than `sandy_min_version`**: actionable error notification ("sandy X found — sandy-ui requires sandy ≥ 1.0.0. Update sandy, then reload the window.").
+- **Schema version in `supported` list** (the normal case, including sandy newer than `sandy_min_version`): no notification.
+- **Schema version exactly one past `supported`'s max** (sandy newer than UI knows, by one): soft-warn notification — "sandy's config schema (vY) is newer than sandy-ui supports (v1) — proceeding with best-effort rendering; some fields may not appear." The schema's additive-change rule (see [SPEC_INTROSPECTION.md](SPEC_INTROSPECTION.md)) means new keys appear without breaking the UI; the UI ignores them.
+- **Schema version more than one past `supported`'s max** (a major schema jump, e.g. sandy schema 3, UI supports 1): actionable error notification, same severity as the version-floor case.
 
-The inverse — sandy newer than `sandy_min_version` within a supported schema — is the normal case and requires no UI change. The schema's additive-change rule (see [SPEC_INTROSPECTION.md](SPEC_INTROSPECTION.md)) means new keys appear without breaking the UI; the UI ignores them.
+**Non-blocking by design**: none of the above disables the extension, blocks activation, or refuses to launch — every branch above is an *informational* notification (plus a line logged to the "Sandy State" output channel every run, regardless of verdict). A genuinely incompatible sandy still surfaces its own errors at launch time; sandy-ui's job here is to make the mismatch legible earlier, not to gate the CLI's own enforcement. This mirrors the existing `--validate-config` precedent (errors are logged, never block launch).
+
+Separately, a present-but-broken sandy (on PATH, but `--print-schema` itself failed) falls back to the bundled mock schema — this is surfaced loudly rather than silently: a banner in the settings webview (`src/settings/webviewPanel.ts`) plus a one-time activation-time warning notification pointing at the "Sandy Settings" output channel for detail.
 
 ## Release cadence
 

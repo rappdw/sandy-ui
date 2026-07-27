@@ -15,6 +15,10 @@ import { daemonInfoFor, findLongRunners, formatAge } from "./state/badge";
 import { pruneOrphansArgs, stopArgs, STOP_EXIT } from "./daemon/contract";
 import { PtySupervisor, Session } from "./terminal/supervisor";
 import { runSynthkitCommand } from "./synthkit/commands";
+import { getCachedSchema } from "./schema/cache";
+import { evaluateCompat, describeVerdict, SANDY_MIN_VERSION, SUPPORTED_SCHEMA_VERSIONS } from "./schema/compat";
+import type { Schema } from "./settings/configIO";
+import schemaMock from "./mocks/schema.json";
 
 // Module-level so deactivate() can reach the supervisor (deactivate doesn't
 // receive ctx in the same way activate does, and the supervisor needs
@@ -100,6 +104,13 @@ export function activate(ctx: vscode.ExtensionContext) {
   // reloads VSCode) and stash a marker here; on activation in the new
   // workspace we pick it up and fire sandy.launch automatically.
   void resumePendingLaunchIfAny(ctx, stateOut);
+
+  // Compatibility gate (rappdw/sandy-ui#30 / SPEC_SANDY_UI.md §Compatibility).
+  // Fire-and-forget: informs, never blocks — activation proceeds regardless,
+  // and launch itself still works (sandy enforces its own compatibility at
+  // runtime), matching the existing "let sandy handle it" precedent used for
+  // --validate-config failures.
+  void runCompatCheck(ctx, stateOut);
 
   ctx.subscriptions.push(
     poller,
@@ -520,6 +531,52 @@ async function launchWithWorkspaceSwitch(
   out.appendLine(`[${new Date().toISOString()}] workspace switch: ${currentWs} → ${targetWs} (pending launch queued)`);
   await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(targetWs), { forceNewWindow: false });
   // Execution doesn't continue past openFolder in practice — VSCode reloads.
+}
+
+// ---------------------------------------------------------------------------
+// Compatibility gate (rappdw/sandy-ui#30). Runs once per activation, against
+// the same cached schema resolution the settings panel uses (no extra sandy
+// invocation beyond what's already needed). NON-BLOCKING by design: this
+// only shows notifications and logs to the Sandy State channel — it never
+// disables commands, never prevents activation, never blocks launch. A
+// genuinely incompatible sandy surfaces its own errors when the user tries
+// to actually use it, same as the --validate-config precedent.
+// ---------------------------------------------------------------------------
+
+async function runCompatCheck(ctx: vscode.ExtensionContext, out: vscode.OutputChannel): Promise<void> {
+  const res = await getCachedSchema(ctx.globalStorageUri.fsPath, schemaMock as Schema);
+  const verdict = evaluateCompat(res.sandy_version, res.schema_version);
+
+  out.appendLine(
+    `[${new Date().toISOString()}] compat check: sandy=${res.sandy_version ?? "(not found)"} `
+    + `schema=${res.schema_version ?? "?"} verdict=${verdict.kind} `
+    + `(declared floor: sandy >= ${SANDY_MIN_VERSION}, schema in [${SUPPORTED_SCHEMA_VERSIONS.join(", ")}])`
+  );
+
+  if (verdict.kind === "too-old" || verdict.kind === "schema-unsupported-major") {
+    vscode.window.showErrorMessage(`Sandy: ${describeVerdict(verdict).message}`);
+  } else if (verdict.kind === "schema-too-new") {
+    vscode.window.showWarningMessage(`Sandy: ${describeVerdict(verdict).message}`);
+  }
+  // "sandy-missing"/"ok" — nothing to surface here; a missing sandy already
+  // gets its own fallback UX (tree placeholder, settings banner).
+
+  // Loud mock-schema fallback (rappdw/sandy-ui#30): sandy IS present (we got
+  // a version) but --print-schema itself failed, so settings render against
+  // the bundled mock rather than this sandy's real schema — the settings
+  // form can silently drift from what this sandy actually accepts. The
+  // settings panel already shows a banner for this case (see
+  // src/settings/webviewPanel.ts); this is the activation-time surface for
+  // anyone who never opens Settings. Simpler one-time-warning path chosen
+  // over threading a schemaSourceProvider into ProjectsTreeProvider for a
+  // dedicated tree node — the settings banner remains the primary, detailed
+  // surface either way.
+  if (res.source === "fallback" && res.sandy_version) {
+    vscode.window.showWarningMessage(
+      `Sandy: sandy is installed but --print-schema failed — using the bundled mock schema. `
+      + `Settings may not match your sandy version. See the "Sandy Settings" output channel for details.`
+    );
+  }
 }
 
 async function resumePendingLaunchIfAny(
