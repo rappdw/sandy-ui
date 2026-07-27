@@ -75,7 +75,23 @@ Then `Cmd+Shift+P` -> **Developer: Reload Window**.
 
 ## Part 3 — Acceptance checks (all against the DGX)
 
-| # | Action (Mac VSCode, SSH:dgx window) | Expected | Cross-check (DGX terminal) |
+> ### If the `jq` cross-checks fail with `Invalid numeric literal at line 1, column 2`
+>
+> Your shell is prepending a terminal-title escape (`ESC ] 0 ; <title> BEL`) to stdout —
+> a title hook writing to fd 1 instead of `/dev/tty`, which corrupts *any* redirected
+> output (found on the original DGX run; [#38](https://github.com/rappdw/sandy-ui/issues/38)).
+> Confirm with `sandy --print-state light | head -c 40 | od -c` (leading `033 ] 0 ;` = the
+> escape). **sandy-ui itself is immune** (its poller tolerates this as of #38), so the UI
+> steps below are unaffected — only the manual `jq` checks are. Strip it inline:
+>
+> ```bash
+> sandy --print-state light | perl -pe 's/\e\][^\a]*\a//' | jq '.running_containers'
+> ```
+>
+> The durable fix is shell-side (guard the title hook on `[[ -t 1 ]]` or write to
+> `/dev/tty`) — not required to finish this runbook.
+
+| # | Action (Mac VSCode, SSH:dgx window) | Expected | Cross-check (DGX terminal — prepend `perl -pe 's/\e\][^\a]*\a//' \|` before `jq` if you hit the title-escape leak) |
 |---|---|---|---|
 | 3.1 | Open the **Sandy** activity-bar view | Tree lists the DGX daemon session (Part 1), badged **persisted** | `sandy --print-state light \| jq '.running_containers[].sandbox'` matches |
 | 3.2 | Click that session (or status bar -> pick it) | A **Sandy** tab opens showing the **live agent tmux** — same screen the DGX CLI sees | `... jq '.running_containers[].attached_clients'` went `0 -> 1` |
