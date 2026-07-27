@@ -95,6 +95,8 @@ The resolved path is cached per-process. `invalidateSandyPathCache()` is wired t
 
 `activationEvents: ["onStartupFinished"]`. Eager activation after VSCode startup is required so `resumePendingLaunchIfAny` runs even when the user doesn't click the Sandy activity bar. Activation no longer implies polling: the StatePoller is cadence-gated on tree-view visibility + window focus (see "State polling"), so a window where the Sandy view is closed does zero `--print-state` invocations.
 
+Activation also fires `runDoctorChecks` (`src/doctor.ts`'s pure `deriveDoctorStatus`, wired from `extension.ts`), which sets `sandy.doctor.sandyOk`/`sandy.doctor.dockerOk` context keys — those drive the fix-it step completion in the `contributes.walkthroughs` "Sandy: Get Started" walkthrough (`sandy.walkthrough.open`, rappdw/sandy-ui#31). `sandy.launch` sets a one-time `sandy.hasLaunched` globalState marker on first invocation; `maybeRestoreSession`'s auto-restore (rappdw/sandy-ui#32) now gates on that marker being `true` so a fresh profile never surprise-restores a session before the walkthrough / an explicit first launch.
+
 ## Workspace-aware launch
 
 `sandy.launch` (and `sandy.tree.launch`) route through `launchWithWorkspaceSwitch` in `extension.ts`. Behavior:

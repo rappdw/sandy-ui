@@ -30,6 +30,14 @@
         "title": "Sandy: Launch (in webview tab)"
       },
       {
+        "command": "sandy.walkthrough.open",
+        "title": "Sandy: Get Started"
+      },
+      {
+        "command": "sandy.walkthrough.ackPersistence",
+        "title": "Sandy: Acknowledge persistence note"
+      },
+      {
         "command": "sandy.approval.test",
         "title": "Sandy: Test Approval Modal"
       },
@@ -206,6 +214,71 @@
         }
       ]
     },
+    "walkthroughs": [
+      {
+        "id": "sandy.gettingStarted",
+        "title": "Get Started with Sandy",
+        "description": "Run sandy in an isolated container, right in your editor.",
+        "when": "true",
+        "steps": [
+          {
+            "id": "checkSandy",
+            "title": "Install sandy",
+            "description": "Sandy is a CLI that runs your coding agent in an isolated Docker sandbox.",
+            "media": {
+              "markdown": "media/walkthrough/checkSandy.md"
+            },
+            "completionEvents": [
+              "onContext:sandy.doctor.sandyOk"
+            ]
+          },
+          {
+            "id": "checkDocker",
+            "title": "Start Docker",
+            "description": "Sandy needs a running Docker-compatible runtime to build and launch its container.",
+            "media": {
+              "markdown": "media/walkthrough/checkDocker.md"
+            },
+            "completionEvents": [
+              "onContext:sandy.doctor.dockerOk"
+            ]
+          },
+          {
+            "id": "firstLaunch",
+            "title": "Launch your first session",
+            "description": "Open sandy as an editor tab against the current workspace.",
+            "media": {
+              "markdown": "media/walkthrough/firstLaunch.md"
+            },
+            "completionEvents": [
+              "onCommand:sandy.launch"
+            ]
+          },
+          {
+            "id": "persistence",
+            "title": "Sessions persist — closing a tab doesn't stop them",
+            "description": "The #1 surprise: closing the tab (or VSCode) detaches sandy, it doesn't stop it.",
+            "media": {
+              "markdown": "media/walkthrough/persistence.md"
+            },
+            "completionEvents": [
+              "onContext:sandy.walkthrough.persistenceRead"
+            ]
+          },
+          {
+            "id": "settingsTour",
+            "title": "Settings & the approval model",
+            "description": "Schema-driven settings with Project/Global scope tabs and a verbatim pre-flight approval modal.",
+            "media": {
+              "markdown": "media/walkthrough/settingsTour.md"
+            },
+            "completionEvents": [
+              "onCommand:sandy.settings.open"
+            ]
+          }
+        ]
+      }
+    ],
     "viewsContainers": {
       "activitybar": [
         {

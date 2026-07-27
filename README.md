@@ -56,6 +56,7 @@ npx electron-rebuild -f -w node-pty
 ## Commands
 
 - **Sandy: Launch (in webview tab)** — opens sandy as an editor tab against the current workspace
+- **Sandy: Get Started** (`sandy.walkthrough.open`) — opens the "Get Started with Sandy" walkthrough: install checks, Docker check, first launch, the persistence gotcha, and a settings tour, each with live fix-it steps
 - **Sandy: Test Approval Modal** — exercises the pre-flight modal with a hostile-content sample
 - **Sandy: Open Settings** — schema-driven settings webview with Project/Global scope tabs
 

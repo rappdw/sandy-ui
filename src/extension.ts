@@ -17,6 +17,7 @@ import { PtySupervisor, Session } from "./terminal/supervisor";
 import { runSynthkitCommand } from "./synthkit/commands";
 import { getCachedSchema } from "./schema/cache";
 import { evaluateCompat, describeVerdict, SANDY_MIN_VERSION, SUPPORTED_SCHEMA_VERSIONS } from "./schema/compat";
+import { deriveDoctorStatus, DoctorStatus } from "./doctor";
 import type { Schema } from "./settings/configIO";
 import schemaMock from "./mocks/schema.json";
 
@@ -120,11 +121,20 @@ export function activate(ctx: vscode.ExtensionContext) {
   // --validate-config failures.
   void runCompatCheck(ctx, stateOut);
 
+  // Doctor checks driving the "Sandy: Get Started" walkthrough's fix-it
+  // steps (rappdw/sandy-ui#31): sets sandy.doctor.sandyOk / dockerOk context
+  // keys from the same schema resolution + poller state the other startup
+  // checks already use. Runs once now, and again on every poll change so the
+  // walkthrough ticks live as the user installs sandy / starts Docker
+  // without needing a reload.
+  void runDoctorChecks(ctx, poller, stateOut);
+
   // Opt-in auto-restore of persisted daemon sessions on window open
   // (rappdw/sandy-ui#32). Gets the pre-resume marker snapshot so it can
   // defer to resumePendingLaunchIfAny when a cross-window launch already
-  // owns this workspace.
-  void maybeRestoreSession(pendingAtActivation, poller, stateOut);
+  // owns this workspace. Also passes ctx back in (rappdw/sandy-ui#31) so it
+  // can read the sandy.hasLaunched first-run gate.
+  void maybeRestoreSession(ctx, pendingAtActivation, poller, stateOut);
 
   ctx.subscriptions.push(
     poller,
@@ -137,6 +147,10 @@ export function activate(ctx: vscode.ExtensionContext) {
     // the bar needs to react to poll results too, not just local spawn/
     // attach/detach/exit events.
     poller.onDidChange(refreshStatusBar),
+    // Re-run doctor checks on every poll change so the walkthrough's
+    // checkDocker step (and sandyOk, in case sandy.binaryPath changed) ticks
+    // off live rather than only at activation.
+    poller.onDidChange(() => void runDoctorChecks(ctx, poller, stateOut)),
     // Long-running-session nudge — see longRunnerNudged declaration above.
     // Reads the threshold at fire time (not cached) so a mid-session
     // settings change takes effect on the next poll without a reload.
@@ -188,7 +202,28 @@ export function activate(ctx: vscode.ExtensionContext) {
     // Palette + tree-default-click. If the target workspace differs from the
     // current one, we openFolder (reloads VSCode), persist a pending-launch
     // marker, and let resumePendingLaunchIfAny finish the job after reload.
-    vscode.commands.registerCommand("sandy.launch", (arg) => launchWithWorkspaceSwitch(ctx, arg?.workspacePath, stateOut)),
+    vscode.commands.registerCommand("sandy.launch", (arg) => {
+      // First-run marker for the auto-restore gate (rappdw/sandy-ui#31,
+      // Part C): a profile that has never actually launched sandy shouldn't
+      // have restoreSessionsOnStartup auto-open a session on some later
+      // window open. This is also the walkthrough's firstLaunch step
+      // completion command, so it's set exactly when that step ticks off.
+      void ctx.globalState.update("sandy.hasLaunched", true);
+      return launchWithWorkspaceSwitch(ctx, arg?.workspacePath, stateOut);
+    }),
+    vscode.commands.registerCommand("sandy.walkthrough.open", () =>
+      vscode.commands.executeCommand("workbench.action.openWalkthrough", "rappdw.sandy-ui#sandy.gettingStarted", false)
+    ),
+    // Button-driven from the persistence walkthrough step's "Got it" link
+    // (command:sandy.walkthrough.ackPersistence) — not palette-worthy on its
+    // own, but harmless to have there. Sets the context key the step's
+    // completionEvent watches, and a separate first-run-complete marker
+    // (distinct from sandy.hasLaunched — this one specifically means "the
+    // user has seen and acknowledged the persistence semantics").
+    vscode.commands.registerCommand("sandy.walkthrough.ackPersistence", () => {
+      void vscode.commands.executeCommand("setContext", "sandy.walkthrough.persistenceRead", true);
+      void ctx.globalState.update("sandy.firstRunComplete", true);
+    }),
     vscode.commands.registerCommand("sandy.approval.test", () => runApprovalTest(ctx)),
     vscode.commands.registerCommand("sandy.settings.open", () => openSettingsPanel(ctx)),
     vscode.commands.registerCommand("sandy.state.refresh", () => poller.refresh()),
@@ -601,6 +636,47 @@ async function runCompatCheck(ctx: vscode.ExtensionContext, out: vscode.OutputCh
   }
 }
 
+// ---------------------------------------------------------------------------
+// Doctor checks (rappdw/sandy-ui#31): the fix-it steps of the "Sandy: Get
+// Started" walkthrough complete via context keys, not polling inside the
+// walkthrough UI itself — VSCode's walkthrough completionEvents watch
+// `onContext:<key>`, so setting these two keys IS what ticks checkSandy/
+// checkDocker off. Runs once at activation and again on every poller change
+// (wired in activate()) so the steps go green live as the user fixes things,
+// without requiring a reload.
+// ---------------------------------------------------------------------------
+
+let lastDoctorStatus: DoctorStatus | undefined;
+
+async function runDoctorChecks(
+  ctx: vscode.ExtensionContext,
+  poller: StatePoller,
+  out: vscode.OutputChannel,
+): Promise<void> {
+  try {
+    // Same cached-schema resolution runCompatCheck uses — a cache hit is
+    // cheap, so a second call here (rather than threading the result
+    // through) keeps this function self-contained and callable from
+    // poller.onDidChange independently of the activation-only compat check.
+    const res = await getCachedSchema(ctx.globalStorageUri.fsPath, schemaMock as Schema);
+    const dockerReachable = poller.current().state?.docker_reachable;
+    const status = deriveDoctorStatus(res.sandy_version, dockerReachable);
+
+    await vscode.commands.executeCommand("setContext", "sandy.doctor.sandyOk", status.sandyOk);
+    await vscode.commands.executeCommand("setContext", "sandy.doctor.dockerOk", status.dockerOk);
+
+    if (!lastDoctorStatus || lastDoctorStatus.sandyOk !== status.sandyOk || lastDoctorStatus.dockerOk !== status.dockerOk) {
+      out.appendLine(
+        `[${new Date().toISOString()}] doctor: sandyOk=${status.sandyOk} `
+        + `(version=${status.sandyVersion ?? "(not found)"}) dockerOk=${status.dockerOk}`
+      );
+      lastDoctorStatus = status;
+    }
+  } catch (e: any) {
+    out.appendLine(`[${new Date().toISOString()}] doctor check failed: ${e?.message ?? e}`);
+  }
+}
+
 async function resumePendingLaunchIfAny(
   ctx: vscode.ExtensionContext,
   out: vscode.OutputChannel,
@@ -640,15 +716,17 @@ async function resumePendingLaunchIfAny(
 // the user click. Defaults OFF and is a strict no-op when unset (step 1's
 // gate returns before touching anything else — no poll, no command).
 //
-// FORWARD-COMPAT SEAM (rappdw/sandy-ui#31, walkthrough not built yet): once
-// the first-run walkthrough lands, it should set a globalState marker while
-// first-run is active, and this function should early-return while it's set
-// — auto-restore must never race the first-run experience. Nothing sets
-// that marker today, so there is deliberately no check for it yet; adding
-// one now would be inert plumbing for a feature that doesn't exist.
+// FIRST-RUN GATE (rappdw/sandy-ui#31, landed): auto-restore now defers to
+// first-run via the sandy.hasLaunched globalState marker, set once inside
+// the sandy.launch command registration in activate(). A fresh profile that
+// has never actually launched sandy never auto-restores, even if
+// restoreSessionsOnStartup is somehow already on (e.g. via Settings Sync) —
+// the walkthrough / an explicit first launch should come first, not a
+// surprise session reopening on some later window open.
 // ---------------------------------------------------------------------------
 
 async function maybeRestoreSession(
+  ctx: vscode.ExtensionContext,
   pendingAtActivation: PendingLaunch | undefined,
   poller: StatePoller,
   out: vscode.OutputChannel,
@@ -657,6 +735,13 @@ async function maybeRestoreSession(
   const restoreEnabled = cfg.get<boolean>("restoreSessionsOnStartup", false);
   const persistEnabled = cfg.get<boolean>("persistSessions", true);
   if (!restoreEnabled || !persistEnabled) return;
+
+  // First-run gate: never auto-restore for a profile that has never
+  // launched sandy at least once (see FIRST-RUN GATE above).
+  if (ctx.globalState.get<boolean>("sandy.hasLaunched") !== true) {
+    out.appendLine(`[${new Date().toISOString()}] auto-restore: skipping — sandy.hasLaunched not yet set (first run)`);
+    return;
+  }
 
   // Never folder-pick on startup — that would be a surprising modal on every
   // window open. Nothing to restore against without a workspace anyway.
