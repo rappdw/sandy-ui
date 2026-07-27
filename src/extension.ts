@@ -99,6 +99,14 @@ export function activate(ctx: vscode.ExtensionContext) {
   // "don't nag repeatedly within one long-lived window", not "ever".
   let longRunnerNudged = false;
 
+  // Snapshot the pending-launch marker BEFORE resume consumes it. VSCode's
+  // Memento.update wipes the in-memory value synchronously, so by the time
+  // maybeRestoreSession runs the marker is already gone — auto-restore's
+  // "did a cross-window launch already claim this workspace?" guard has to
+  // read the pre-resume value or it always sees undefined and double-opens
+  // (batch-2 verify finding 1).
+  const pendingAtActivation = ctx.globalState.get<PendingLaunch>(PENDING_LAUNCH_KEY);
+
   // Honor a pending launch from a previous-window tree click. When the user
   // clicks a tree item for a different workspace, we openFolder (which
   // reloads VSCode) and stash a marker here; on activation in the new
@@ -113,11 +121,10 @@ export function activate(ctx: vscode.ExtensionContext) {
   void runCompatCheck(ctx, stateOut);
 
   // Opt-in auto-restore of persisted daemon sessions on window open
-  // (rappdw/sandy-ui#32). Fired AFTER resumePendingLaunchIfAny and
-  // runCompatCheck above, on purpose: a pending cross-window launch marker
-  // must win over auto-restore (see maybeRestoreSession's own guard for
-  // why "after" isn't even load-bearing on its own — belt and suspenders).
-  void maybeRestoreSession(ctx, poller, stateOut);
+  // (rappdw/sandy-ui#32). Gets the pre-resume marker snapshot so it can
+  // defer to resumePendingLaunchIfAny when a cross-window launch already
+  // owns this workspace.
+  void maybeRestoreSession(pendingAtActivation, poller, stateOut);
 
   ctx.subscriptions.push(
     poller,
@@ -642,7 +649,7 @@ async function resumePendingLaunchIfAny(
 // ---------------------------------------------------------------------------
 
 async function maybeRestoreSession(
-  ctx: vscode.ExtensionContext,
+  pendingAtActivation: PendingLaunch | undefined,
   poller: StatePoller,
   out: vscode.OutputChannel,
 ): Promise<void> {
@@ -658,9 +665,11 @@ async function maybeRestoreSession(
 
   // No double-open, guard 1: a pending cross-window launch marker targeting
   // THIS workspace means resumePendingLaunchIfAny already owns firing
-  // sandy.launch for it (it clears the marker itself — read-only here).
-  const pending = ctx.globalState.get<PendingLaunch>(PENDING_LAUNCH_KEY);
-  if (pending && pending.workspace === currentWs && (Date.now() - pending.at) <= PENDING_LAUNCH_TTL_MS) {
+  // sandy.launch for it. Uses the pre-resume SNAPSHOT (resume has already
+  // cleared the live marker synchronously by the time we run — reading
+  // globalState here would always miss it; see the snapshot in activate()).
+  if (pendingAtActivation && pendingAtActivation.workspace === currentWs
+      && (Date.now() - pendingAtActivation.at) <= PENDING_LAUNCH_TTL_MS) {
     out.appendLine(`[${new Date().toISOString()}] auto-restore: skipping ${currentWs} — pending launch marker already owns it`);
     return;
   }
@@ -689,6 +698,15 @@ async function maybeRestoreSession(
     hit = checkOnce();
   }
   if (!hit) return;
+
+  // Guard 2, re-checked AFTER the wait: resume's sandy.launch runs on a
+  // 500ms timer and registers its session asynchronously, so a check before
+  // the ~1.5s wait can miss it. Re-checking here closes the window where
+  // resume's launch (or any other) landed a session while we waited.
+  if (supervisor?.getSession(currentWs)) {
+    out.appendLine(`[${new Date().toISOString()}] auto-restore: ${currentWs} acquired a session during the wait — skipping`);
+    return;
+  }
 
   // Single-window discipline: guards 1+2 above (plus sandy.launch's own
   // reveal guard) cover intra-instance dupes. Two VSCode windows open on the
