@@ -29,7 +29,10 @@ In the DGX SSH terminal:
 ```bash
 cd ~/dev/<some-project>      # a real workspace under $HOME
 sandy --start                # detached daemon session; returns when attachable
-sandy --print-state light | jq '.running_containers'   # confirm daemon:true, attached_clients:0
+# confirm daemon:true, attached_clients:0. The `perl` strip guards against a
+# shell title-escape leak on stdout (harmless no-op otherwise; see the jq
+# callout in Part 3 for what it is):
+sandy --print-state light | perl -pe 's/\e\][^\a]*\a//' | jq '.running_containers'
 ```
 
 Leave it running. Note the workspace path — you'll open **that exact folder** from the Mac.
