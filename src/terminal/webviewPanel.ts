@@ -21,6 +21,7 @@ type ToHost =
   | { type: "ready"; cols: number; rows: number }
   | { type: "input"; data: string }
   | { type: "resize"; cols: number; rows: number }
+  | { type: "wake";   cols: number; rows: number }
   | { type: "osc";    event: OscEvent }
   | { type: "openExternal"; uri: string }
   | { type: "log";    level: "info" | "error"; msg: string };
@@ -203,14 +204,7 @@ export async function openTerminalPanel(
           const cols = m.cols || 80;
           const rows = m.rows || 24;
           try {
-            const sess = session;
-            sess.pty.resize(cols, rows);
-            setTimeout(() => {
-              try { sess.pty.resize(cols, Math.max(rows - 1, 2)); } catch { /* swallow */ }
-              setTimeout(() => {
-                try { sess.pty.resize(cols, rows); } catch { /* swallow */ }
-              }, 60);
-            }, 80);
+            forceTmuxRepaint(session.pty, cols, rows);
           } catch (e: any) { log(`re-attach resize failed: ${e?.message ?? e}`); }
           break;
         }
@@ -422,6 +416,23 @@ export async function openTerminalPanel(
         session?.pty.resize(m.cols, m.rows);
         break;
       }
+      case "wake": {
+        // The webview (client-side) detected a long wall-clock gap — the
+        // laptop slept and woke (clamshell). The extension host + PTY never
+        // died (esp. on a remote host), so tmux still thinks the client is
+        // there at the old size and won't redraw — xterm is stuck on the
+        // pre-sleep frame. Force the same SIGWINCH repaint the re-attach path
+        // uses so the screen self-heals, instead of the user having to close
+        // and reopen the tab. Only meaningful for a live attached session.
+        if (!session || session.exited || !panel.visible) break;
+        const cols = m.cols >= 20 ? m.cols : lastCols;
+        const rows = m.rows >= 5  ? m.rows : lastRows;
+        lastCols = cols; lastRows = rows;
+        log(`wake: forcing tmux repaint at ${cols}x${rows}`);
+        try { forceTmuxRepaint(session.pty, cols, rows); }
+        catch (e: any) { log(`wake repaint failed: ${e?.message ?? e}`); }
+        break;
+      }
       case "osc":    handleOsc(panel, m.event); break;
       case "openExternal": {
         // From the web-links addon (click on a detected URL). Scheme guard is
@@ -502,6 +513,22 @@ export async function openTerminalPanel(
 // (docker stop, docker network rm), wait briefly, then force-remove any
 // surviving lock files so the subsequent spawn isn't blocked. Best-effort:
 // each step is wrapped in try/catch and we always proceed to the spawn.
+// Force a full tmux repaint by toggling the PTY size (rows → rows-1 → rows).
+// tmux only emits diffs from what it thinks the terminal shows, so a fresh or
+// stale xterm gets nothing until a SIGWINCH provokes a full redraw. Used by
+// the re-attach path and the wake-from-sleep path. Short delays so the three
+// resizes register as distinct SIGWINCH events; all wrapped since the PTY may
+// have exited between scheduling and firing.
+function forceTmuxRepaint(pty: Session["pty"], cols: number, rows: number): void {
+  pty.resize(cols, rows);
+  setTimeout(() => {
+    try { pty.resize(cols, Math.max(rows - 1, 2)); } catch { /* PTY may have exited */ }
+    setTimeout(() => {
+      try { pty.resize(cols, rows); } catch { /* PTY may have exited */ }
+    }, 60);
+  }, 80);
+}
+
 async function forceStopOrphans(aliveLockPaths: string[], log: (m: string) => void): Promise<void> {
   for (const lockPath of aliveLockPaths) {
     const pid = readLockPid(lockPath);

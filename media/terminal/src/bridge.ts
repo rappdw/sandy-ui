@@ -21,6 +21,7 @@ type ToHost =
   | { type: "ready";  cols: number; rows: number }
   | { type: "input";  data: string }
   | { type: "resize"; cols: number; rows: number }
+  | { type: "wake";   cols: number; rows: number }
   | { type: "osc";    event: OscEvent }
   | { type: "openExternal"; uri: string }
   | { type: "log";    level: "info" | "error"; msg: string };
@@ -504,6 +505,37 @@ type FromHost =
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") forceRefit("visibilitychange");
   });
+
+  // ---- Wake-from-sleep detection ------------------------------------------
+  // Clamshell/sleep suspends this webview's renderer (it runs on the CLIENT),
+  // but the extension host + PTY keep running (esp. against a remote host) —
+  // so on wake tmux still thinks the client is present at the old size and
+  // never redraws, leaving xterm frozen on the pre-sleep frame. Neither the
+  // host's onDidChangeViewState nor visibilitychange reliably fires when the
+  // tab was (and stays) visible across the sleep, so those repaint paths miss
+  // it and the user has to close+reopen the tab.
+  //
+  // A heartbeat is the robust signal: a timer that should tick every
+  // HEARTBEAT_MS will show a much larger wall-clock gap when the renderer was
+  // suspended. A gap past WAKE_GAP_MS means "we slept" → ask the host to
+  // force a tmux repaint (the SIGWINCH toggle). The gap threshold is well
+  // above a hidden-tab throttle interval so a background tab doesn't
+  // false-trigger; an occasional benign repaint is harmless anyway.
+  const HEARTBEAT_MS = 10_000;
+  const WAKE_GAP_MS  = 30_000;
+  let lastBeat = Date.now();
+  setInterval(() => {
+    const now = Date.now();
+    const gap = now - lastBeat;
+    lastBeat = now;
+    if (gap > WAKE_GAP_MS) {
+      log(`wake: ${Math.round(gap / 1000)}s gap — requesting tmux repaint`);
+      // Re-measure first (layout may have changed while asleep), then tell
+      // the host our current size so it can SIGWINCH-toggle the PTY.
+      try { fit.fit(); } catch { /* swallow */ }
+      post({ type: "wake", cols: term.cols, rows: term.rows });
+    }
+  }, HEARTBEAT_MS);
 
   // ---- Receive PTY bytes ---------------------------------------------------
   let writes = 0;
