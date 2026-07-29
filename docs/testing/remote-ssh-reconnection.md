@@ -8,31 +8,45 @@ make it. This layers three independent fixes; apply them in order and verify eac
 
 | Layer | Problem it solves | Where it lives | Status |
 |---|---|---|---|
-| **1. Daemon session** | *Losing work.* The container/agent keep running on the host regardless of the client. | sandy (`--start` / `sandy.persistSessions`) | shipped — **the only one that's about safety** |
+| **1. Daemon session** | *Losing work.* The container/agent keep running on the host regardless of the client. | sandy-ui (drives `sandy --start`; on by default) | **automatic — nothing to set up** |
 | **2. Wake repaint (Symptom A)** | *Frozen frame.* After wake, the terminal is stuck on the pre-sleep screen until you close+reopen the tab. | sandy-ui (webview heartbeat → SIGWINCH repaint) | shipped (commit `2efafa8` / ≥ 0.8.1) |
 | **3. Resilient transport (Symptom B)** | *Sluggish stream.* After wake the terminal is laggy until you reload the whole VSCode window. | transport (Eternal Terminal), below sandy-ui | optional — comfort, self-hosted |
 
-Key framing: **Layer 1 already means you never lose work** — a dropped connection costs a
-repaint + maybe a reconnect, never your session. Layers 2 and 3 are comfort. Do 1, then 2,
-then 3 only if the stream sluggishness actually bothers you.
+Key framing: **Layer 1 is automatic and already means you never lose work** — when you launch
+from sandy-ui it runs `sandy --start` + `--attach` for you (the 0.6.0 daemon backend), so a
+dropped connection costs a repaint + maybe a reconnect, never your session. You don't do
+anything for Layer 1; the check below is troubleshooting-only. Layers 2 and 3 are the comfort
+fixes: 2 is a build you install, 3 an optional transport you only bother with if the stream
+sluggishness actually annoys you.
 
 Prereqs: the base [`remote-ssh-runbook.md`](remote-ssh-runbook.md) working (sandy-ui installed
 in the remote extension host, a session attaches). This runbook is only about the
 *after-sleep* experience.
 
-## Layer 1 — Daemon sessions (safety; verify it's on)
+## Layer 1 — Daemon sessions (automatic; nothing to do)
 
-On the DGX, sessions must be daemonized so they outlive the client. sandy-ui does this by
-default (`sandy.persistSessions: true`, launching via `sandy --start`). Verify:
+**You don't set this up.** When you launch a session from sandy-ui, it runs `sandy --start`
+(detached daemon) + `sandy --attach` for you — the 0.6.0 daemon backend — so the session
+already outlives the client. This section is a *troubleshooting check*, not a step: only run
+it if a session seems to actually die on disconnect.
+
+sandy-ui uses the daemon path automatically unless one of these opts out of it:
+- `sandy.persistSessions` set to `false` (default is `true`),
+- `sandy.launchCommand` set (any value forces the legacy lifecycle),
+- the installed sandy predates daemon mode (< 1.1.0; feature-detected), or
+- the session wasn't launched by sandy-ui at all (e.g. a bare `sandy` you started by hand on
+  the DGX — that's the interactive lifecycle, not a daemon).
+
+Confirm daemon mode is in effect (only if troubleshooting):
 
 ```bash
 # DGX, while a sandy-ui session is attached (strip any shell title-escape; see the base runbook):
 sandy --print-state light | perl -pe 's/\e\][^\a]*\a//' | jq '.running_containers[] | {sandbox, daemon, attached_clients}'
 ```
 
-Expect `daemon: true`. If it's `false`/absent, you're on the legacy lifecycle — check
-`sandy.persistSessions` isn't overridden and `sandy.launchCommand` isn't set (either forces
-legacy). With `daemon: true`, a lid-close cannot lose the session; everything below is polish.
+Expect `daemon: true`. If it's `false`/absent, one of the opt-outs above is in play. With
+`daemon: true` (the default for any sandy-ui-launched session), a lid-close cannot lose the
+session; everything below is polish.
 
 **Test it:** attach a session, note the screen, close the lid ~1 min, reopen. In a DGX
 terminal, `sandy --print-state light | … | jq '.running_containers'` still shows the
