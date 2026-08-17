@@ -69,6 +69,40 @@ describe("deriveBadge", () => {
       const s = sb({ lock_held: true });
       expect(deriveBadge(s, null, { now: NOW })).toBe("locked");
     });
+
+    it("returns 'locked' when lock_holder_alive is true", () => {
+      const s = sb({ lock_held: true, lock_holder_alive: true });
+      expect(deriveBadge(s, [], { now: NOW })).toBe("locked");
+    });
+
+    it("returns 'locked' when lock_holder_alive is undefined (back-compat with older sandy)", () => {
+      const s = sb({ lock_held: true, lock_holder_alive: undefined });
+      expect(deriveBadge(s, [], { now: NOW })).toBe("locked");
+    });
+
+    it("returns 'locked' when lock_holder_alive is null", () => {
+      const s = sb({ lock_held: true, lock_holder_alive: null });
+      expect(deriveBadge(s, [], { now: NOW })).toBe("locked");
+    });
+
+    // A dead holder does NOT demote the badge. The badge describes the lock
+    // FILE (held either way) and drives contextValue -> menu visibility, so
+    // demoting would hide "Remove Lock" from exactly the case it exists for.
+    // Liveness is surfaced as text (description/tooltip/modal) instead.
+    it("still returns 'locked' when lock_holder_alive is false (recent last_used_at)", () => {
+      const s = sb({ lock_held: true, lock_holder_alive: false, last_used_at: "2026-04-26T00:00:00Z" });  // 1 day ago
+      expect(deriveBadge(s, [], { now: NOW })).toBe("locked");
+    });
+
+    it("still returns 'locked' when lock_holder_alive is false (very old last_used_at)", () => {
+      const s = sb({ lock_held: true, lock_holder_alive: false, last_used_at: "2026-01-01T00:00:00Z" });  // > 30 days before NOW
+      expect(deriveBadge(s, [], { now: NOW })).toBe("locked");
+    });
+
+    it("running container still wins over a dead lock", () => {
+      const s = sb({ lock_held: true, lock_holder_alive: false });
+      expect(deriveBadge(s, [container("myproj-abc12345")], { now: NOW })).toBe("running");
+    });
   });
 
   describe("stale", () => {
@@ -338,3 +372,4 @@ describe("findLongRunners", () => {
     expect(result.map(r => r.sandboxName)).toEqual(["myproj-abc12345", "other-sandbox"]);
   });
 });
+

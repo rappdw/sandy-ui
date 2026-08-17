@@ -406,15 +406,27 @@ export function activate(ctx: vscode.ExtensionContext) {
 
       const lockPath = lockPathForSandbox(sb.name);
       const holderPid = sb.lock_holder_pid;
+      // lock_holder_alive (sandy 1.1.0+, feature-detected) lets us state
+      // liveness definitively instead of guessing. undefined/null (older
+      // sandy, or no PID recorded) keeps today's hedged wording.
+      const holderAlive: boolean | null | undefined = sb.lock_holder_alive;
+      let pidClause: string;
+      if (holderPid == null) {
+        pidClause = `No PID is recorded in the lock — likely a leftover from a crashed sandy.\n\n`;
+      } else if (holderAlive === true) {
+        pidClause = `The lock is held by PID ${holderPid}, confirmed still running. Removing this lock is dangerous — it would let a second sandy spawn against the same container/network.\n\n`;
+      } else if (holderAlive === false) {
+        pidClause = `The lock claims to be held by PID ${holderPid}, but that process is confirmed NOT running. This is a safe stale-lock removal.\n\n`;
+      } else {
+        pidClause = `The lock claims to be held by PID ${holderPid}. If that process is actually alive and using sandy, removing this lock is dangerous.\n\n`;
+      }
       const choice = await vscode.window.showWarningMessage(
         `Remove lock for "${sb.name}"?`,
         {
           modal: true,
           detail:
             `This deletes the lock file:\n  ${lockPath}\n\n` +
-            (holderPid != null
-              ? `The lock claims to be held by PID ${holderPid}. If that process is actually alive and using sandy, removing this lock is dangerous.\n\n`
-              : `No PID is recorded in the lock — likely a leftover from a crashed sandy.\n\n`) +
+            pidClause +
             `Sandbox files and any approval records are NOT touched. The next sandy launch will re-acquire the lock cleanly.`,
         },
         "Remove Lock"

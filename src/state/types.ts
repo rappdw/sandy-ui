@@ -19,6 +19,9 @@ export interface SandySandbox {
   size_bytes?: number;
   lock_held?: boolean;
   lock_holder_pid?: number | null;
+  // Emitted by sandy (per-sandbox): true/false when a lock exists, null when
+  // none, absent on older sandy — feature-detect, treat undefined as "unknown".
+  lock_holder_alive?: boolean | null;
   compat_warning?: string | null;
 }
 

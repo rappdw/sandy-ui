@@ -187,6 +187,16 @@ function describe(s: SandySandbox, badge: SandboxBadge, daemonInfo?: DaemonInfo)
   const parts: string[] = [];
   if (s.agent) parts.push(s.agent);
   parts.push(badge);
+  // Distinguish a lock whose holder sandy reports as DEAD from a live one:
+  // both badge "locked" (see deriveBadge — the badge describes the lock file),
+  // so without this the two are indistinguishable at a glance even though only
+  // one blocks anything. Guarded on `badge !== "running"` because a live daemon
+  // session routinely carries a dead-holder lock — VSCode quits, the local
+  // `--attach` client's pid dies, the container survives by design — and
+  // labelling that "stale lock" would be actively wrong.
+  if (badge !== "running" && s.lock_held === true && s.lock_holder_alive === false) {
+    parts.push("stale lock");
+  }
   const base = parts.join(" · ");
   if (!daemonInfo) return base;
   const clients = daemonInfo.attachedClients != null
@@ -197,11 +207,22 @@ function describe(s: SandySandbox, badge: SandboxBadge, daemonInfo?: DaemonInfo)
   return `${base} · persisted${clients}${upSuffix}`;
 }
 
+// Terse "lock pid N[, liveness]" fragment for the tooltip's State line. Liveness
+// is only stated when sandy tells us it definitively (lock_holder_alive
+// true/false); undefined/null (older sandy or no lock info) keeps today's
+// plain "lock pid N" wording.
+function lockDetail(s: SandySandbox): string {
+  const pid = `lock pid ${s.lock_holder_pid ?? "?"}`;
+  if (s.lock_holder_alive === true) return `${pid}, holder alive`;
+  if (s.lock_holder_alive === false) return `${pid}, holder not running — stale lock, next launch clears it`;
+  return pid;
+}
+
 function tooltipFor(s: SandySandbox, badge: SandboxBadge, daemonInfo?: DaemonInfo): string {
   const lines = [
     `Workspace: ${s.workspace_path ?? "(unknown — sandbox has no workspace_path)"}`,
     `Sandbox:   ${s.name}`,
-    `State:     ${badge}` + (s.lock_held ? ` (lock pid ${s.lock_holder_pid ?? "?"})` : ""),
+    `State:     ${badge}` + (s.lock_held ? ` (${lockDetail(s)})` : ""),
   ];
   if (s.agent)              lines.push(`Agent:     ${s.agent}`);
   if (s.last_used_at)       lines.push(`Last used: ${s.last_used_at}`);

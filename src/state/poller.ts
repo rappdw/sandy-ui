@@ -118,6 +118,10 @@ function equalsSummary(a: SandyState | undefined, b: SandyState | undefined): bo
     const sb = b.sandboxes[i];
     if (sa.name !== sb.name) return false;
     if (!!sa.lock_held !== !!sb.lock_held) return false;
+    // Tri-state (true/false/null) plus "absent" (undefined) on older sandy —
+    // compare with ===, not !! coercion, which would collapse null and false
+    // into the same falsy bucket and miss a dead-holder transition.
+    if (sa.lock_holder_alive !== sb.lock_holder_alive) return false;
     if (sa.last_used_at !== sb.last_used_at) return false;
   }
   // Compare running_containers names by sandbox attribution.

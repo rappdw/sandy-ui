@@ -17,6 +17,17 @@ import * as os from "os";
 //
 // On VSCode reload / crash sandy's cleanup trap doesn't always run, leaving
 // the lock behind even though the PID is dead. This module sweeps for those.
+//
+// LAUNCH-TIME/CLEANUP ONLY (rappdw/sandy-ui#42). sandy >= 1.1.0's
+// `--print-state` now emits a per-sandbox `lock_holder_alive` field, and
+// display/detection (tree badge, tooltip, "Remove lock?" wording) reads that
+// instead — see src/state/badge.ts. This filesystem-based module stays
+// as-is for two reasons: (a) removing a stale lock is a mutation
+// `--print-state` can't perform — this module is where that actually
+// happens; and (b) the StatePoller is cadence-gated and stopped entirely
+// while the tree view is hidden, so its data can be stale or absent exactly
+// when a launch decision needs to be made — launch time needs a fresh
+// synchronous read, not a cached poll.
 
 export const DEFAULT_SANDBOX_DIR = path.join(os.homedir(), ".sandy", "sandboxes");
 
