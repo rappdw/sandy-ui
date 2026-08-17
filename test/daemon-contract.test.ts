@@ -3,6 +3,7 @@ import {
   ATTACH_EXIT,
   STOP_EXIT,
   classifyAttachExit,
+  classifyDaemonAttachExit,
   startArgs,
   attachArgs,
   stopArgs,
@@ -39,6 +40,57 @@ describe("classifyAttachExit", () => {
   it("undefined/null (killed by signal, no exit code observed) → failed", () => {
     expect(classifyAttachExit(undefined)).toBe("failed");
     expect(classifyAttachExit(null)).toBe("failed");
+  });
+});
+
+describe("classifyDaemonAttachExit", () => {
+  it("detachRequested=true wins over every (code, signal) combination", () => {
+    expect(classifyDaemonAttachExit(0, undefined, true)).toBe("detached");
+    expect(classifyDaemonAttachExit(0, null, true)).toBe("detached");
+    expect(classifyDaemonAttachExit(0, 0, true)).toBe("detached");
+    expect(classifyDaemonAttachExit(0, 15, true)).toBe("detached");
+    expect(classifyDaemonAttachExit(3, undefined, true)).toBe("detached");
+    expect(classifyDaemonAttachExit(4, undefined, true)).toBe("detached");
+    expect(classifyDaemonAttachExit(5, undefined, true)).toBe("detached");
+    expect(classifyDaemonAttachExit(5, 9, true)).toBe("detached");
+  });
+
+  it("signal set with code 0 → detached (the core regression: without the fix this would be 'ended')", () => {
+    expect(classifyDaemonAttachExit(0, 15, false)).toBe("detached"); // SIGTERM
+    expect(classifyDaemonAttachExit(0, 9, false)).toBe("detached");  // SIGKILL
+  });
+
+  it("signal set with code 5 → detached", () => {
+    expect(classifyDaemonAttachExit(5, 15, false)).toBe("detached");
+    expect(classifyDaemonAttachExit(5, 9, false)).toBe("detached");
+  });
+
+  it("signal 0 falls through to the code table", () => {
+    expect(classifyDaemonAttachExit(0, 0, false)).toBe("ended");
+    expect(classifyDaemonAttachExit(3, 0, false)).toBe("detached");
+    expect(classifyDaemonAttachExit(4, 0, false)).toBe("no-session");
+    expect(classifyDaemonAttachExit(5, 0, false)).toBe("failed");
+  });
+
+  it("signal undefined falls through to the code table", () => {
+    expect(classifyDaemonAttachExit(0, undefined, false)).toBe("ended");
+    expect(classifyDaemonAttachExit(3, undefined, false)).toBe("detached");
+    expect(classifyDaemonAttachExit(4, undefined, false)).toBe("no-session");
+    expect(classifyDaemonAttachExit(5, undefined, false)).toBe("failed");
+  });
+
+  it("signal null falls through to the code table", () => {
+    expect(classifyDaemonAttachExit(0, null, false)).toBe("ended");
+    expect(classifyDaemonAttachExit(3, null, false)).toBe("detached");
+    expect(classifyDaemonAttachExit(4, null, false)).toBe("no-session");
+    expect(classifyDaemonAttachExit(5, null, false)).toBe("failed");
+  });
+
+  it("detachRequested=false + no signal → identical results to classifyAttachExit", () => {
+    for (const code of [0, 3, 4, 5, undefined, null, 99]) {
+      expect(classifyDaemonAttachExit(code as any, undefined, false)).toBe(classifyAttachExit(code as any));
+      expect(classifyDaemonAttachExit(code as any, null, false)).toBe(classifyAttachExit(code as any));
+    }
   });
 });
 

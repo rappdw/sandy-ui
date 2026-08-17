@@ -34,6 +34,44 @@ export function classifyAttachExit(code: number | undefined | null): AttachOutco
   }
 }
 
+// DAEMON-ONLY policy layered on top of classifyAttachExit (which stays
+// unchanged above — this wraps it, never replaces it). On Unix, node-pty
+// reports a signal death as exitCode 0 + signal N and a normal exit as
+// exitCode N + signal 0 (WIFEXITED/WIFSIGNALED are mutually exclusive, and
+// both fields default to 0), so classifyAttachExit(0) would read a
+// signal-killed client as "ended" ("session ended while attached"). For a
+// daemon session that's wrong: the pty here is only the LOCAL
+// `sandy --attach` CLIENT, a separate process tree from the durable
+// host-side daemon session (sandy's D9 rule — the running labeled container
+// is the durable truth, not whatever happened to the local client). A signal
+// killing the client says nothing about whether the session is still alive.
+//
+// Windows note: node-pty's Windows path emits exit with ONE argument, so
+// `signal` is always undefined there and this degenerates to
+// classifyAttachExit. Harmless — sandy is Docker/Unix-only.
+//
+// So: a signal death (or an explicit detachRequested from our own
+// detach()) is classified "detached" rather than falling through to the
+// code table. This deliberately fails OPEN. Failing CLOSED would paint
+// `[process exited 0]` into a terminal whose session is very much alive and
+// make the user think their work was lost; failing open costs at most a
+// relaunch — and relaunch re-runs the idempotent `sandy --start` before
+// `--attach`, so a session that HAD died is simply recreated rather than
+// erroring. Either way the poller re-reads `--print-state` within 5-60s and
+// the tree/status bar converge on the truth.
+//
+// For the DIRECT backend this function does not apply: there the pty IS the
+// session, so any exit ends it — that handler doesn't classify at all.
+export function classifyDaemonAttachExit(
+  code: number | undefined | null,
+  signal: number | undefined | null,
+  detachRequested: boolean,
+): AttachOutcome {
+  if (detachRequested) return "detached";
+  if (typeof signal === "number" && signal !== 0) return "detached";
+  return classifyAttachExit(code);
+}
+
 export function startArgs(workspacePath: string): string[] {
   return ["--start", "--workspace", workspacePath];
 }

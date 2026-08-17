@@ -37,11 +37,16 @@ export interface Session {
   exited: boolean;
   exitCode?: number;
   // Set by detach() (daemon backend only) BEFORE killing the local attach
-  // client, so promoteToAttach's onExit can treat the outcome as "detached"
-  // deterministically instead of relying on the exit code an externally
-  // signalled client produces (unverified for signals — the contract's
-  // exit-3-means-detached table is for the user-driven `sandy --attach`
-  // detach keystroke, not for us SIGKILLing our own client).
+  // client, so an observed exit is known to be WE-initiated detach intent
+  // rather than a failure — the contract's exit-3-means-detached table is for
+  // the user-driven `sandy --attach` detach keystroke, not for us killing our
+  // own client.
+  //
+  // In practice this is belt-and-braces at promoteToAttach's onExit: detach()
+  // removes the session from the map synchronously right after kill(), so that
+  // handler's identity guard returns before it ever classifies. The flag still
+  // feeds classifyDaemonAttachExit's highest-precedence branch so the intent is
+  // honoured if the ordering ever changes.
   detachRequested?: boolean;
 }
 
@@ -159,10 +164,13 @@ export class PtySupervisor implements vscode.Disposable {
   /**
    * Phase 2 of the two-phase daemon launch: replaces session.pty with the
    * `sandy --attach` pty (once `--start` exited 0), wires data piping, and
-   * classifies the attach pty's eventual exit via classifyAttachExit:
-   *   - "detached" (code 3) → user cleanly detached, session lives on the
-   *     host. Removed from the map (the supervisor tracks local clients
-   *     only); {kind:"client-detached"} fires so callers can update UI.
+   * classifies the attach pty's eventual exit via classifyDaemonAttachExit
+   * (code, signal, detachRequested):
+   *   - "detached" (detachRequested, or the client died by signal, or code
+   *     3) → user cleanly detached, or the local client was killed/signalled
+   *     without that saying anything about the durable host-side session.
+   *     Removed from the map (the supervisor tracks local clients only);
+   *     {kind:"client-detached"} fires so callers can update UI.
    *   - "ended" | "no-session" | "failed" → session is over. Marked exited,
    *     exit posted to the panel (existing behavior), removed from the map,
    *     {kind:"exited"} fires.
@@ -174,7 +182,7 @@ export class PtySupervisor implements vscode.Disposable {
   promoteToAttach(workspacePath: string, pty: PtyHandle): void {
     const session = this.sessions.get(workspacePath);
     if (!session) return;
-    const { classifyAttachExit } = require("../daemon/contract") as typeof import("../daemon/contract");
+    const { classifyDaemonAttachExit } = require("../daemon/contract") as typeof import("../daemon/contract");
 
     session.pty = pty;
 
@@ -183,17 +191,35 @@ export class PtySupervisor implements vscode.Disposable {
       const p = session.panel;
       if (p) p.webview.postMessage({ type: "data", data: d });
     });
-    pty.onExit((code) => {
+    pty.onExit((code, signal) => {
       if (session.pty !== pty) return; // stale callback from a superseded pty
-      if (!this.sessions.has(session.id)) return; // already removed (e.g. via stopDaemon's own completion race)
-      // detachRequested wins over the exit-code table: exit 3 is the
-      // contract for a user-driven detach keystroke inside tmux, but an
-      // externally-signalled client's exit code is unspecified — and when
-      // WE initiated the kill (detach()), the intent IS detach regardless
-      // of what code the OS reports.
-      const outcome = session.detachRequested ? "detached" : classifyAttachExit(code);
+      // Identity, not key presence: session.id is the workspace path, so after
+      // a detach-then-relaunch the key is repopulated by a NEW Session. A late
+      // onExit from the OLD pty would otherwise pass both guards and delete the
+      // brand-new live session out of the map.
+      if (this.sessions.get(session.id) !== session) return; // already removed / superseded
+      // classifyDaemonAttachExit layers signal-awareness and detachRequested
+      // on top of the exit-code table — see its doc comment in
+      // src/daemon/contract.ts for why a signal death (or a WE-initiated
+      // detach()) must not be read as the durable daemon session dying.
+      const outcome = classifyDaemonAttachExit(code, signal, !!session.detachRequested);
       if (outcome === "detached") {
         this.log(`daemon client detached workspace=${session.workspacePath}`);
+        // If a panel is STILL attached, the client went away without the user
+        // closing the tab — an externally signalled/crashed `sandy --attach`,
+        // the case this classification exists for. Say so in the terminal:
+        // otherwise the tab looks live but is inert (writes go to a dead pty
+        // and pty.write swallows them), with the only trace in the output
+        // channel. The tab-close and tree-detach paths dispose the panel
+        // themselves and never reach this.
+        const detachedPanel = session.panel;
+        if (detachedPanel) {
+          detachedPanel.webview.postMessage({
+            type: "data",
+            data: "\r\n\x1b[2m[local client detached — the sandy session persists on the host; relaunch to re-attach]\x1b[0m\r\n",
+          });
+          detachedPanel.title = "Sandy (detached)";
+        }
         this.sessions.delete(session.id);
         this._onDidChange.fire({ kind: "client-detached", session });
         return;
