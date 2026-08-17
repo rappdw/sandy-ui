@@ -7,6 +7,8 @@
 
 export {}; // mark as module so local types don't leak into global scope
 
+import { sgrPress, sgrDrag, sgrRelease } from "./sgrMouse";
+
 // ---- Message contracts ----------------------------------------------------
 // Mirrors the host-side ToHost / FromHost types in src/terminal/webviewPanel.ts.
 // Kept structural (no shared file) because host code is Node-targeted and this
@@ -176,8 +178,11 @@ type FromHost =
       // We intercept tmux's mouse-tracking enables below (see "split mouse"
       // section) so xterm never forwards click/drag — plain drag selects
       // natively, no modifier needed. macOptionClickForcesSelection stays on
-      // purely so ⌥-drag does NOT fall into xterm's column-select (crosshair)
-      // mode; with mouse tracking suppressed, ⌥ is otherwise a no-op.
+      // for two reasons: in tmux mode it's what makes ⌥-drag fall back to
+      // native selection while tmux owns the mouse, and it keeps ⌥-drag out of
+      // xterm's column-select (crosshair) mode. In nativeSelection mode ⌥-drag
+      // is instead captured in the split-mouse section and forwarded to tmux
+      // (pane resize / focus / copy-mode), so it never reaches this xterm path.
       macOptionClickForcesSelection: true,
       rightClickSelectsWord: true,
     });
@@ -402,6 +407,92 @@ type FromHost =
       if (term.hasSelection()) term.clearSelection();
       return false; // handled — suppress xterm's own (alt-screen) wheel behavior
     });
+
+    // ---- ⌥-drag forwards the mouse to tmux (nativeSelection mode) ----------
+    // The tracking swallow above makes plain drag select text — but it also
+    // puts tmux's own mouse features (pane-border RESIZE, click-to-focus a
+    // pane, copy-mode) out of reach, since tmux never sees a click. Restore
+    // them behind ⌥, mirroring tmux mode's inverse exception ("⌥-drag
+    // selects"): here, holding ⌥ and dragging with the LEFT button synthesizes
+    // SGR mouse reports straight to the PTY (same trick as the wheel
+    // re-injection above), so tmux acts on the click/drag while unmodified drag
+    // stays native selection. We intercept in the CAPTURE phase and
+    // stopPropagation so xterm's own mousedown (and its
+    // macOptionClickForcesSelection path) never starts a selection for this
+    // gesture. No-op in tmux mode (tmux already owns the mouse there), when ⌥
+    // isn't held, or for non-left buttons (leaves right-click/context menu
+    // untouched). A single ⌥-click (press+release, no move) reads to tmux as a
+    // plain click → focuses the pane under the cursor.
+    const dragHost = document.getElementById("terminal");
+    if (dragHost) {
+      const cellAt = (clientX: number, clientY: number): { col: number; row: number } | null => {
+        const rect = dragHost.getBoundingClientRect();
+        if (term.cols < 1 || term.rows < 1) return null;
+        const cellW = rect.width / term.cols;
+        const cellH = rect.height / term.rows;
+        if (cellW <= 0 || cellH <= 0) return null;
+        const col = Math.min(term.cols, Math.max(1, Math.floor((clientX - rect.left) / cellW) + 1));
+        const row = Math.min(term.rows, Math.max(1, Math.floor((clientY - rect.top) / cellH) + 1));
+        return { col, row };
+      };
+
+      const LEFT = 0; // SGR base button code for the left button
+      let dragging = false;
+      let lastCol = -1, lastRow = -1;
+
+      // End an in-flight drag: send the SGR release at the given cell (clamped
+      // to a valid 1-based coord) and detach the transient document listeners.
+      // Shared by the normal mouseup, the missed-mouseup self-heal, and the
+      // window-blur fallback — all idempotent via the `dragging` guard.
+      const finishDrag = (col: number, row: number): void => {
+        if (!dragging) return;
+        post({ type: "input", data: sgrRelease(LEFT, Math.max(1, col), Math.max(1, row)) });
+        dragging = false; lastCol = -1; lastRow = -1;
+        document.removeEventListener("mousemove", onMove, true);
+        document.removeEventListener("mouseup", onUp, true);
+      };
+
+      // Motion is reported only when the pointer crosses into a new cell —
+      // tmux resizes per-cell, so per-pixel reports would just be noise.
+      const onMove = (ev: MouseEvent): void => {
+        if (!dragging) return;
+        // Self-heal a missed mouseup while still inside the iframe: if the left
+        // button is no longer down, end the drag rather than emitting forever.
+        if ((ev.buttons & 1) === 0) { onUp(ev); return; }
+        const at = cellAt(ev.clientX, ev.clientY);
+        if (!at || (at.col === lastCol && at.row === lastRow)) return;
+        lastCol = at.col; lastRow = at.row;
+        post({ type: "input", data: sgrDrag(LEFT, at.col, at.row) });
+      };
+
+      const onUp = (ev: MouseEvent): void => {
+        // Release outside the grid (pointer left the element): fall back to the
+        // last in-grid cell so tmux still gets a well-formed release.
+        const at = cellAt(ev.clientX, ev.clientY);
+        finishDrag(at?.col ?? lastCol, at?.row ?? lastRow);
+      };
+
+      // Prompt fallback for the gap the buttons-check can't catch: the pointer
+      // leaves the iframe AND releases entirely outside it, so no mousemove/
+      // mouseup ever returns. Losing window focus is the reliable signal that
+      // the interaction left our control — flush a release at the last known
+      // cell so tmux isn't left mid-drag until the pointer happens to re-enter.
+      window.addEventListener("blur", () => finishDrag(lastCol, lastRow));
+
+      dragHost.addEventListener("mousedown", (ev: MouseEvent): void => {
+        if (mouseMode !== "nativeSelection" || !ev.altKey || ev.button !== 0) return;
+        const at = cellAt(ev.clientX, ev.clientY);
+        if (!at) return;
+        ev.preventDefault();
+        ev.stopPropagation();          // preempt xterm's selection for this gesture
+        try { term.focus(); } catch { /* preventDefault can suppress default focus */ }
+        dragging = true; lastCol = at.col; lastRow = at.row;
+        post({ type: "input", data: sgrPress(LEFT, at.col, at.row) });
+        document.addEventListener("mousemove", onMove, true);
+        document.addEventListener("mouseup", onUp, true);
+      }, true); // capture: run before xterm's descendant listeners
+    }
+
     log("split-mouse handlers registered");
   } catch (e) {
     // Non-fatal — basic terminal output and keyboard still work without this.
