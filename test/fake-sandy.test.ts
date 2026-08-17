@@ -71,6 +71,14 @@ function waitForExit(child: ReturnType<typeof spawn>): Promise<number | null> {
   return new Promise((resolve) => child.once("exit", (code) => resolve(code)));
 }
 
+function waitForExitFull(child: ReturnType<typeof spawn>): Promise<{ code: number | null; signal: string | null }> {
+  return new Promise((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
+}
+
+function attachPidPath(name: string): string {
+  return path.join(stateDir, "sessions", `${name}.attach.pid`);
+}
+
 describeUnix("fake-sandy: --print-schema", () => {
   it("parses via the real parseSandySchema and reports daemon capability", () => {
     const { stdout, code } = run(["--print-schema"]);
@@ -174,6 +182,78 @@ describeUnix("fake-sandy: --attach", () => {
       const code = await waitForExit(child);
       expect(code).toBe(0);
       expect(fs.existsSync(sessionPath(name))).toBe(false);
+    } finally {
+      try { child.kill(); } catch { /* already gone */ }
+    }
+  });
+
+  it("default (no knob): SIGTERM converts to a numeric exit 3, signal null (pins the existing contract)", async () => {
+    run(["--start", "--workspace", "/tmp/proj-sigterm-default"]);
+    const name = "proj-sigterm-default-fake0001";
+    const child = spawn(FIXTURE, ["--attach", "--workspace", "/tmp/proj-sigterm-default"], {
+      env: { ...process.env, FAKE_SANDY_STATE: stateDir },
+    });
+    try {
+      await until(() => fs.existsSync(sessionPath(name)) && sessionAttachedClients(name) === 1);
+      child.kill("SIGTERM");
+      const { code, signal } = await waitForExitFull(child);
+      expect(code).toBe(3);
+      expect(signal).toBeNull();
+    } finally {
+      try { child.kill(); } catch { /* already gone */ }
+    }
+  });
+
+  it("knobs/attach-signal-death: SIGTERM kills the process outright — code null, signal SIGTERM", async () => {
+    run(["--start", "--workspace", "/tmp/proj-sigterm-death"]);
+    writeKnob("attach-signal-death");
+    const name = "proj-sigterm-death-fake0001";
+    const child = spawn(FIXTURE, ["--attach", "--workspace", "/tmp/proj-sigterm-death"], {
+      env: { ...process.env, FAKE_SANDY_STATE: stateDir },
+    });
+    try {
+      await until(() => fs.existsSync(sessionPath(name)) && sessionAttachedClients(name) === 1);
+      child.kill("SIGTERM");
+      const { code, signal } = await waitForExitFull(child);
+      expect(signal).toBe("SIGTERM");
+      expect(code).toBeNull();
+    } finally {
+      try { child.kill(); } catch { /* already gone */ }
+    }
+  });
+
+  it("records the attach pid in sessions/<name>.attach.pid while attached, removes it on clean .detach exit", async () => {
+    run(["--start", "--workspace", "/tmp/proj-pidfile"]);
+    const name = "proj-pidfile-fake0001";
+    const child = spawn(FIXTURE, ["--attach", "--workspace", "/tmp/proj-pidfile"], {
+      env: { ...process.env, FAKE_SANDY_STATE: stateDir },
+    });
+    try {
+      await until(() => fs.existsSync(sessionPath(name)) && sessionAttachedClients(name) === 1);
+      await until(() => fs.existsSync(attachPidPath(name)));
+      const recordedPid = parseInt(fs.readFileSync(attachPidPath(name), "utf8").trim(), 10);
+      expect(recordedPid).toBe(child.pid);
+
+      fs.writeFileSync(path.join(stateDir, "sessions", `${name}.detach`), "");
+      const code = await waitForExit(child);
+      expect(code).toBe(3);
+      expect(fs.existsSync(attachPidPath(name))).toBe(false);
+    } finally {
+      try { child.kill(); } catch { /* already gone */ }
+    }
+  });
+
+  it("--stop with a live attach client: the attach child observes the session vanish and exits 0 on its own", async () => {
+    run(["--start", "--workspace", "/tmp/proj-stop-live"]);
+    const name = "proj-stop-live-fake0001";
+    const child = spawn(FIXTURE, ["--attach", "--workspace", "/tmp/proj-stop-live"], {
+      env: { ...process.env, FAKE_SANDY_STATE: stateDir },
+    });
+    try {
+      await until(() => fs.existsSync(sessionPath(name)) && sessionAttachedClients(name) === 1);
+      expect(run(["--stop", "--workspace", "/tmp/proj-stop-live"]).code).toBe(0);
+      const code = await waitForExit(child);
+      expect(code).toBe(0);
     } finally {
       try { child.kill(); } catch { /* already gone */ }
     }

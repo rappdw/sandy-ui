@@ -25,6 +25,12 @@
 #   sessions/<name>.detach   — control file: makes a blocked --attach exit 3
 #   sessions/<name>.end      — control file: makes a blocked --attach exit 0
 #                              and removes the session
+#   sessions/<name>.attach.pid — the live --attach process's own pid, written
+#                              once signal handling is armed and removed on
+#                              every clean exit path (.detach, .end, the
+#                              signal trap, and session-json-vanished) but NOT
+#                              on a signal death (the process doesn't get to
+#                              clean up — the realistic behavior modelled)
 #   knobs/start-exit         — numeric; --start exits with this code
 #   knobs/attach-exit        — numeric; --attach exits with this code immediately
 #   knobs/version             — overrides --version output (and --print-schema's
@@ -33,6 +39,10 @@
 #   knobs/schema-version      — numeric; --print-schema's schema_version (default 1) —
 #                              drives the sandy-ui compat gate (rappdw/sandy-ui#30)
 #   knobs/orphans             — numeric; --print-state's orphan_networks (default 0)
+#   knobs/attach-signal-death — presence-only; --attach does NOT install the
+#                              exit-3 signal trap, so TERM/HUP/INT kill the
+#                              process outright (pty reports exitCode 0 +
+#                              signal N) instead of converting to exit 3
 #
 # Workspace -> session name is a pure function of the workspace path (no
 # lookup table needed): sanitize the basename the way sandy does
@@ -262,23 +272,48 @@ cmd_attach() {
 
   set_attached_clients "$name" 1
 
-  # Mimics an externally-signalled client (tab close / VSCode quit): the
-  # frozen contract's exit-3 code is really for the user-driven detach
-  # keystroke, but 3 is the safe "session lives on" outcome for a signalled
-  # kill too — sandy-ui's own detachRequested flag is what actually
-  # disambiguates on the caller side (see supervisor.ts), so the exact code
-  # here just needs to be a plausible "detached" outcome.
-  trap 'set_attached_clients "$name" 0; exit 3' TERM HUP INT
+  local pidfile="$FAKE_SANDY_STATE/sessions/$name.attach.pid"
+
+  if [ -f "$FAKE_SANDY_STATE/knobs/attach-signal-death" ]; then
+    # Let the default disposition apply — TERM/HUP/INT kill the process
+    # outright, so node-pty observes exitCode 0 + a signal (the real-sandy
+    # regression this knob models; see rappdw/sandy-ui#46). No cleanup runs:
+    # a signal-killed client doesn't get to remove its own pid file.
+    trap - TERM HUP INT
+  else
+    # Mimics an externally-signalled client (tab close / VSCode quit): the
+    # frozen contract's exit-3 code is really for the user-driven detach
+    # keystroke, but 3 is the safe "session lives on" outcome for a signalled
+    # kill too — sandy-ui's own detachRequested flag is what actually
+    # disambiguates on the caller side (see supervisor.ts), so the exact code
+    # here just needs to be a plausible "detached" outcome.
+    trap 'set_attached_clients "$name" 0; rm -f "$pidfile"; exit 3' TERM HUP INT
+  fi
+
+  # Written AFTER the trap is installed (or deliberately cleared), so the
+  # appearance of this file is a happens-after barrier for "signal handling is
+  # armed". Tests wait on it before signalling; writing it earlier would leave
+  # a window where a signal races the trap and produces the wrong outcome.
+  echo $$ > "$pidfile"
 
   while true; do
     if [ -f "$FAKE_SANDY_STATE/sessions/$name.detach" ]; then
       rm -f "$FAKE_SANDY_STATE/sessions/$name.detach"
       set_attached_clients "$name" 0
+      rm -f "$pidfile"
       exit 3
     fi
     if [ -f "$FAKE_SANDY_STATE/sessions/$name.end" ]; then
       rm -f "$FAKE_SANDY_STATE/sessions/$name.end"
       rm -f "$f"
+      rm -f "$pidfile"
+      exit 0
+    fi
+    if [ ! -f "$f" ]; then
+      # The session was torn down out from under us (e.g. `--stop`). Real
+      # sandy's attach client observes the container vanish and exits 0 on
+      # its own (see supervisor.ts stopDaemon's doc comment).
+      rm -f "$pidfile"
       exit 0
     fi
     sleep 0.2

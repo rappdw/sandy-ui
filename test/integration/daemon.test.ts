@@ -293,4 +293,86 @@ describe("Daemon lifecycle (fake-sandy)", function () {
     await vscode.commands.executeCommand("sandy.tree.stop", { sandbox: { name: sandboxName, workspace_path: ws } });
     await until(() => !sessionExists(sandboxName), 10_000);
   });
+
+  it("8. a signal-killed attach client is treated as detached, not ended (rappdw/sandy-ui#46)", async () => {
+    // Models an externally-signalled `sandy --attach` client dying by signal
+    // rather than converting the signal to a numeric exit (the exit-3 path
+    // covered by tests 1-4). classifyDaemonAttachExit (src/daemon/contract.ts,
+    // exercised via supervisor.ts) must still classify this as "detached" —
+    // the daemon session persists on the fixture and no --stop is issued.
+    fs.mkdirSync(path.join(stateDir, "knobs"), { recursive: true });
+    fs.writeFileSync(path.join(stateDir, "knobs", "attach-signal-death"), "");
+
+    const pidPath = path.join(stateDir, "sessions", `${sandboxName}.attach.pid`);
+    // Clear any leftover before launching: existsSync() alone can't tell this
+    // case's pid file from an earlier one's, and acting on a stale pid would
+    // send SIGTERM to whatever recycled it.
+    fs.rmSync(pidPath, { force: true });
+
+    const marker = invocations().length;
+    await vscode.commands.executeCommand("sandy.launch");
+
+    await until(() => {
+      const post = invocations().slice(marker);
+      const startIdx = post.indexOf(`--start --workspace ${ws}`);
+      const attachIdx = post.indexOf(`--attach --workspace ${ws}`);
+      return startIdx !== -1 && attachIdx !== -1 && attachIdx > startIdx;
+    }, 15_000);
+    assert.ok(sandyTabs().length > 0, "expected a Sandy-labeled tab to be open");
+
+    await until(() => sessionExists(sandboxName) && readSession(sandboxName).attached_clients === 1, 10_000);
+
+    // The fixture writes this only after its signal trap is armed (or
+    // deliberately cleared), so its appearance is a happens-after barrier —
+    // signalling before it exists could race the trap.
+    await until(() => fs.existsSync(pidPath), 10_000);
+    const pid = parseInt(fs.readFileSync(pidPath, "utf8").trim(), 10);
+    assert.ok(Number.isInteger(pid) && pid > 0, `expected a valid pid in ${pidPath}`);
+
+    process.kill(pid, "SIGTERM");
+
+    // THE discriminating assertion. The two supervisor branches differ
+    // observably only in what they do to the panel: "detached" writes the
+    // local-client-detached notice and retitles to "Sandy (detached)", while
+    // "ended" posts {type:"exit"} (rendered as "[process exited 0]") and
+    // leaves the title on "Sandy (attached pid=N)". Nothing else here
+    // separates them — the fixture's session json survives either way (only
+    // .end/--stop remove it) and sandy-ui issues no --stop in either branch,
+    // so asserting only on those would pass even with #45 reverted.
+    //
+    // No webviewPanel-registered onExit competes for this title: the
+    // "Sandy (exit N)" handler lives in the legacy/direct spawn path, and the
+    // other is on the --start pty, neither of which is this attach pty.
+    await until(() => sandyTabs().some(t => t.label === "Sandy (detached)"), 10_000);
+
+    const labels = sandyTabs().map(t => t.label);
+    assert.ok(
+      labels.includes("Sandy (detached)"),
+      `signal-killed attach client must classify as detached; tab labels were ${JSON.stringify(labels)}`
+    );
+    // Future-proofing guard, NOT a discriminator: no daemon-path code sets
+    // "Sandy (exit N)" today (that title belongs to the legacy spawn handler),
+    // so this passes either way. It exists to catch a future change that
+    // starts routing daemon exits through the legacy titling.
+    assert.ok(
+      !labels.some(l => l.startsWith("Sandy (exit")),
+      `signal death must not be reported as a session exit; tab labels were ${JSON.stringify(labels)}`
+    );
+
+    // Supporting checks (necessary but not sufficient on their own).
+    assert.ok(sessionExists(sandboxName), "the daemon session should persist on the fixture");
+    assert.ok(
+      !invocations().slice(marker).some(l => l.startsWith("--stop")),
+      "signal death must not trigger --stop; the daemon session should survive"
+    );
+
+    // Teardown. stateDir is per-suite (mkdtemp in before, rm -rf in after), so
+    // this can't leak across FILES — the exposure is a future case in THIS file
+    // inheriting a live attach-signal-death knob.
+    fs.rmSync(path.join(stateDir, "knobs", "attach-signal-death"), { force: true });
+    await closeSandyTabs();
+    await vscode.commands.executeCommand("sandy.state.refresh");
+    await vscode.commands.executeCommand("sandy.tree.stop", { sandbox: { name: sandboxName, workspace_path: ws } });
+    await until(() => !sessionExists(sandboxName), 10_000);
+  });
 });
