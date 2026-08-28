@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { launchCandidates, buildCleanEnv, spawnPty } from "./pty";
 import { OscEvent } from "./oscHandler";
 import { sweepStaleLocks, readLockPid, isPidAlive } from "./sandyState";
+import { shouldUseDaemon } from "../daemon/launchMode";
 import * as fs from "fs";
 import { checkPreflightApproval } from "../approval/preflight";
 import { PtySupervisor, Session } from "./supervisor";
@@ -33,10 +34,56 @@ type FromHost =
   | { type: "scrollSensitivity"; value: number }
   | { type: "mouseMode"; value: string };
 
+// A `sandy --start` failure the user can usually fix in one step, but never
+// from here: --start forks its supervisor with stdin on /dev/null
+// (`nohup … </dev/null …`), so a first-encounter approval hit during container
+// bring-up — the dangerous-symlink prompt is the one people actually meet —
+// CANNOT be answered and the start fails closed. Bare `sandy` never forks,
+// which is why the same workspace launches fine from a shell.
+//
+// We can't identify that case programmatically: all three --start failure modes
+// (approval refused / container crash-loop / readiness timeout) exit 1, and the
+// `.fatal` marker sandy writes is removed before --start exits. Scraping the
+// streamed log for sandy's wording is the human-output parsing we're pushing to
+// eliminate upstream, so we don't. Instead offer the recovery that helps in all
+// three: relaunch once on the legacy foreground path, where sandy runs directly
+// on our pty — any prompt renders in the tab and webview input reaches it, and
+// a crash-loop/timeout at least surfaces its real error interactively.
+//
+// Deliberately a ONE-LAUNCH bypass, not a settings flip: turning off
+// sandy.persistSessions to answer a one-time prompt would silently cost the
+// user session persistence from then on.
+//
+// Upstream: rappdw/sandy#221 asks for the pre-fork approval pass to cover these
+// prompts (which would remove the failure entirely, since sandy-ui DOES give
+// --start a real pty) and for refusal to get its own exit code.
+async function offerForegroundRetry(
+  ws: string,
+  code: number,
+  panel: vscode.WebviewPanel,
+  log: (msg: string) => void,
+): Promise<void> {
+  const RETRY = "Retry in Foreground";
+  const choice = await vscode.window.showErrorMessage(
+    `Sandy: sandy --start failed (exit ${code}). Daemon mode can't answer prompts ` +
+    `(e.g. approving a symlink) — retry in the foreground to respond to it. ` +
+    `Sandy's own output is in the terminal.`,
+    RETRY,
+  );
+  if (choice !== RETRY) return;
+  log("forceLegacy retry requested after --start failure");
+  // Dispose the dead panel first so the retry doesn't leave a stale tab behind.
+  // Safe: abortDaemonStart already removed the session from the supervisor map,
+  // so the dispose handler's detach() call is a no-op.
+  try { panel.dispose(); } catch { /* already gone */ }
+  await vscode.commands.executeCommand("sandy.launch", { workspacePath: ws, forceLegacy: true });
+}
+
 export async function openTerminalPanel(
   ctx: vscode.ExtensionContext,
   supervisor: PtySupervisor,
   workspaceOverride?: string,
+  opts: { forceLegacy?: boolean } = {},
 ) {
   // Source-of-workspace priority:
   //   1. Explicit override (from tree-item click — sandy.launch invoked with
@@ -102,11 +149,22 @@ export async function openTerminalPanel(
   // the schema cache to check daemon capability (sandy-ui#24).
   const launchOverride = vscode.workspace.getConfiguration("sandy").get<string>("launchCommand", "").trim();
   const persist = vscode.workspace.getConfiguration("sandy").get<boolean>("persistSessions", true);
-  const daemonCapable = !launchOverride && persist && hasDaemonCapability((await getCachedSchema(ctx.globalStorageUri.fsPath, schemaMock as Schema)).schema);
+  // forceLegacy short-circuits BEFORE the schema-cache call, same rationale as
+  // launchOverride: a launch that can't take the daemon path shouldn't pay to
+  // ask whether the daemon path is available.
+  const daemonCapable = !opts.forceLegacy && !launchOverride && persist
+    && hasDaemonCapability((await getCachedSchema(ctx.globalStorageUri.fsPath, schemaMock as Schema)).schema);
   const sandyBin = daemonCapable ? resolveSandyBinary() : undefined;
-  const useDaemon = !launchOverride && daemonCapable && !!sandyBin;   // no resolvable binary → legacy path
-  log(`launch mode: ${useDaemon ? "daemon" : "legacy"} (persistSessions=${persist}, daemonCapable=${daemonCapable}, sandyBin=${sandyBin ?? "n/a"}, launchOverride=${launchOverride || "none"})`);
+  const useDaemon = shouldUseDaemon({
+    forceLegacy: !!opts.forceLegacy,
+    launchCommand: launchOverride,
+    persistSessions: persist,
+    daemonCapable,
+    hasSandyBinary: !!sandyBin,     // no resolvable binary → legacy path
+  });
+  log(`launch mode: ${useDaemon ? "daemon" : "legacy"} (persistSessions=${persist}, daemonCapable=${daemonCapable}, sandyBin=${sandyBin ?? "n/a"}, launchOverride=${launchOverride || "none"}, forceLegacy=${!!opts.forceLegacy})`);
   if (launchOverride) log("launchCommand override set — legacy lifecycle");
+  if (opts.forceLegacy) log("forceLegacy — one-launch daemon bypass so sandy runs in the foreground and can prompt");
 
   // Maximize editor space for the sandy session if the user has opted in
   // (defaults: bottom panel + auxiliary bar closed; primary sidebar kept).
@@ -292,7 +350,7 @@ export async function openTerminalPanel(
             } else {
               log(`daemon: --start failed exit=${code}`);
               supervisor.abortDaemonStart(ws, code);
-              vscode.window.showErrorMessage(`Sandy: sandy --start failed (exit ${code}) — see terminal output`);
+              void offerForegroundRetry(ws, code, panel, log);
             }
           });
           break;

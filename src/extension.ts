@@ -203,7 +203,7 @@ export function activate(ctx: vscode.ExtensionContext) {
     // current one, we openFolder (reloads VSCode), persist a pending-launch
     // marker, and let resumePendingLaunchIfAny finish the job after reload.
     vscode.commands.registerCommand("sandy.launch", (arg) =>
-      launchWithWorkspaceSwitch(ctx, arg?.workspacePath, stateOut)),
+      launchWithWorkspaceSwitch(ctx, arg?.workspacePath, stateOut, { forceLegacy: !!arg?.forceLegacy })),
     vscode.commands.registerCommand("sandy.walkthrough.open", () =>
       vscode.commands.executeCommand("workbench.action.openWalkthrough", "rappdw.sandy-ui#sandy.gettingStarted", false)
     ),
@@ -549,6 +549,11 @@ async function launchWithWorkspaceSwitch(
   ctx: vscode.ExtensionContext,
   targetWs: string | undefined,
   out: vscode.OutputChannel,
+  // One-launch daemon bypass, offered when `sandy --start` fails so sandy can
+  // run in the foreground and actually prompt. Threaded to the direct
+  // openTerminalPanel calls only: the workspace-switch path reloads the window,
+  // and a retry is always for the workspace already open, so it never gets there.
+  opts: { forceLegacy?: boolean } = {},
 ): Promise<void> {
   if (!supervisor) return;  // not activated yet (shouldn't happen in practice)
   // First-run marker for the auto-restore gate (rappdw/sandy-ui#31, Part C):
@@ -559,7 +564,7 @@ async function launchWithWorkspaceSwitch(
   // command, so a tree-only user still flips it (batch-3 gap).
   void ctx.globalState.update("sandy.hasLaunched", true);
   // No target — defer to openTerminalPanel which prompts for a folder.
-  if (!targetWs) return openTerminalPanel(ctx, supervisor, undefined);
+  if (!targetWs) return openTerminalPanel(ctx, supervisor, undefined, opts);
 
   // A live session (attached or detached) for the target already exists in
   // THIS extension host — attach in place, regardless of which folder VSCode
@@ -567,7 +572,7 @@ async function launchWithWorkspaceSwitch(
   // mismatch, and the window reload killed the extension host AND the PTY:
   // "re-attach" destroyed the very session it promised to restore (B5).
   if (supervisor.getSession(targetWs)) {
-    return openTerminalPanel(ctx, supervisor, targetWs);
+    return openTerminalPanel(ctx, supervisor, targetWs, opts);
   }
 
   const currentWs = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -575,13 +580,13 @@ async function launchWithWorkspaceSwitch(
   if (currentWs && currentWs === targetWs) {
     // Already in the right workspace — just launch (or re-attach if a
     // detached session exists for this workspace).
-    return openTerminalPanel(ctx, supervisor, targetWs);
+    return openTerminalPanel(ctx, supervisor, targetWs, opts);
   }
 
   if (!currentWs) {
     // No folder open at all — no reload needed; openTerminalPanel will use
     // the override directly. (Equivalent to "Launch here" in an empty window.)
-    return openTerminalPanel(ctx, supervisor, targetWs);
+    return openTerminalPanel(ctx, supervisor, targetWs, opts);
   }
 
   // Workspace mismatch — switch by openFolder (reloads VSCode), and persist
