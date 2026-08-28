@@ -16,11 +16,62 @@
 // The two --attach outcomes callers branch on most: 3 = "user detached,
 // session lives" (offer reattach), 0 = "session is over" (fall back to a
 // fresh launch).
+//
+// --start has its own table (rappdw/sandy#221, sandy >= 1.8.1):
+//
+//   code | --start
+//   -----|--------------------------------------------------------------
+//   0    | daemon session ready and attachable
+//   6    | refused before launch — a startup approval was not granted
+//   7    | container crash-looping (RestartCount >= 3)
+//   8    | readiness timeout — never became attachable
+//
+// Older sandy exited 1 for all three failure modes (verified against the v1.7.0
+// and v1.8.0 tags, which use 6/7/8 nowhere), so 1 — and anything else —
+// classifies as a generic "failed" and MUST stay actionable: a consumer that
+// only understood 6/7/8 would regress on every pre-1.8.1 sandy. Note 1 is also
+// still reachable on CURRENT sandy from checks that run before the daemon
+// dispatcher (docker missing/down, unwritable SANDY_HOME, bad --workspace).
+//
+// 6 is deliberately coarse upstream — it is "the approve-only pre-pass exited
+// nonzero", which covers at least three different situations:
+//   - the user declined an answerable y/N approval prompt,
+//   - a HARD refusal that is not a prompt at all (e.g. a new escaping symlink
+//     since the last approval — sandy errors out and tells the user to clear
+//     the approval list or remove the symlink), and
+//   - the pre-pass failing for a mundane reason such as a missing binary.
+// So do NOT tell the user what to do based on 6 alone: sandy has already
+// printed the specific reason and the exact remedy on our terminal. Point
+// there rather than promising a prompt that may not exist.
 
 export const ATTACH_EXIT = { SESSION_ENDED: 0, DETACHED: 3, NO_SESSION: 4, FAILED: 5 } as const;
 export const STOP_EXIT   = { STOPPED: 0, NO_SESSION: 4, FAILED: 5 } as const;
+export const START_EXIT  = { READY: 0, REFUSED: 6, CRASH_LOOP: 7, TIMEOUT: 8 } as const;
 
 export type AttachOutcome = "ended" | "detached" | "no-session" | "failed";
+export type StartOutcome  = "ready" | "refused" | "crash-loop" | "timeout" | "failed";
+
+/**
+ * Classify a `sandy --start` exit. Anything outside the known table — 1 from a
+ * pre-1.8.1 sandy, 1 from a pre-dispatcher check on current sandy, or an
+ * unknown future code — is "failed": still a failure, just one we can't
+ * explain, so callers keep whatever generic-but-actionable path they have.
+ *
+ * Signals are NOT handled here and deliberately so: node-pty reports a signal
+ * death as exitCode 0 + signal N (see src/terminal/pty.ts), so a signalled
+ * `--start` arrives as code 0 and the caller treats it as success and proceeds
+ * to --attach — which then fails cleanly through the --attach table. The
+ * undefined/null inputs accepted below are defensive only.
+ */
+export function classifyStartExit(code: number | undefined | null): StartOutcome {
+  switch (code) {
+    case START_EXIT.READY:      return "ready";
+    case START_EXIT.REFUSED:    return "refused";
+    case START_EXIT.CRASH_LOOP: return "crash-loop";
+    case START_EXIT.TIMEOUT:    return "timeout";
+    default:                    return "failed";
+  }
+}
 
 // Anything outside the known table — including undefined/null (process
 // killed by signal, no exit code observed) — classifies as "failed" so
@@ -70,6 +121,36 @@ export function classifyDaemonAttachExit(
   if (detachRequested) return "detached";
   if (typeof signal === "number" && signal !== 0) return "detached";
   return classifyAttachExit(code);
+}
+
+/**
+ * User-facing explanation for a failed `sandy --start`, chosen from the exit
+ * table. Lives here (pure) rather than inline in webviewPanel.ts so the wording
+ * — which is the entire point of branching on these codes — is unit-testable;
+ * that module imports vscode and can't be.
+ *
+ * Every string must be true of what sandy ACTUALLY does on that path. In
+ * particular "refused" must not promise a prompt: exit 6 also covers hard
+ * refusals that are errors, not questions, and telling the user to answer a
+ * prompt that will never appear is the exact failure this branching replaced.
+ */
+export function startFailureMessage(code: number | undefined | null): string {
+  const shown = code ?? "unknown";
+  switch (classifyStartExit(code)) {
+    case "refused":
+      return `Sandy: a startup approval was not granted (exit ${shown}), so the daemon session wasn't started. ` +
+             `The terminal shows sandy's reason and the exact fix. Retrying in the foreground runs sandy directly, ` +
+             `which lets you answer the prompt if it's an answerable one.`;
+    case "crash-loop":
+      return `Sandy: the daemon container is crash-looping (exit ${shown}) — sandy is tearing the failed session down. ` +
+             `The container log tail is in the terminal.`;
+    case "timeout":
+      return `Sandy: the daemon session never became attachable (exit ${shown}). ` +
+             `The supervisor log tail is in the terminal.`;
+    default:
+      return `Sandy: sandy --start failed (exit ${shown}). Sandy's own output is in the terminal. ` +
+             `If it was waiting on a prompt, retrying in the foreground lets you answer it.`;
+  }
 }
 
 export function startArgs(workspacePath: string): string[] {

@@ -10,7 +10,7 @@ import { PtySupervisor, Session } from "./supervisor";
 // settings/webviewPanel.ts uses to source the mock fallback.
 import schemaMock from "../mocks/schema.json";
 import { getCachedSchema } from "../schema/cache";
-import { hasDaemonCapability, startArgs, attachArgs } from "../daemon/contract";
+import { hasDaemonCapability, startArgs, attachArgs, startFailureMessage } from "../daemon/contract";
 import { resolveSandyBinary } from "../state/sandyPath";
 import { Schema } from "../settings/configIO";
 
@@ -34,29 +34,28 @@ type FromHost =
   | { type: "scrollSensitivity"; value: number }
   | { type: "mouseMode"; value: string };
 
-// A `sandy --start` failure the user can usually fix in one step, but never
-// from here: --start forks its supervisor with stdin on /dev/null
-// (`nohup … </dev/null …`), so a first-encounter approval hit during container
-// bring-up — the dangerous-symlink prompt is the one people actually meet —
-// CANNOT be answered and the start fails closed. Bare `sandy` never forks,
-// which is why the same workspace launches fine from a shell.
+// A failed `sandy --start`, made recoverable without a settings change.
 //
-// We can't identify that case programmatically: all three --start failure modes
-// (approval refused / container crash-loop / readiness timeout) exit 1, and the
-// `.fatal` marker sandy writes is removed before --start exits. Scraping the
-// streamed log for sandy's wording is the human-output parsing we're pushing to
-// eliminate upstream, so we don't. Instead offer the recovery that helps in all
-// three: relaunch once on the legacy foreground path, where sandy runs directly
-// on our pty — any prompt renders in the tab and webview input reaches it, and
-// a crash-loop/timeout at least surfaces its real error interactively.
+// History worth keeping: --start forks its supervisor with stdin on /dev/null
+// (`nohup … </dev/null …`), so approvals hit during container bring-up used to
+// be unanswerable — a workspace with a symlink launched fine from a shell and
+// failed here with no prompt. rappdw/sandy#221 fixed that upstream: sandy now
+// resolves startup approvals on the CLIENT's tty BEFORE forking, and sandy-ui
+// gives --start a real node-pty, so those prompts do render in this tab.
+//
+// What's left is everything that can still fail. sandy >= 1.8.1 distinguishes
+// them by exit code (see the table in src/daemon/contract.ts) and we pick the
+// message from it — never asserting a cause we can't back, and never promising
+// a prompt, since exit 6 also covers hard refusals that aren't questions.
+// Pre-1.8.1 sandy exits 1 for everything, which stays a generic message.
+//
+// The offer itself is useful across all of them: relaunching once on the legacy
+// path runs sandy directly on our pty, so an answerable prompt can be answered
+// and any other failure surfaces interactively instead of via a log tail.
 //
 // Deliberately a ONE-LAUNCH bypass, not a settings flip: turning off
-// sandy.persistSessions to answer a one-time prompt would silently cost the
+// sandy.persistSessions to get past a single launch would silently cost the
 // user session persistence from then on.
-//
-// Upstream: rappdw/sandy#221 asks for the pre-fork approval pass to cover these
-// prompts (which would remove the failure entirely, since sandy-ui DOES give
-// --start a real pty) and for refusal to get its own exit code.
 async function offerForegroundRetry(
   ws: string,
   code: number,
@@ -64,12 +63,7 @@ async function offerForegroundRetry(
   log: (msg: string) => void,
 ): Promise<void> {
   const RETRY = "Retry in Foreground";
-  const choice = await vscode.window.showErrorMessage(
-    `Sandy: sandy --start failed (exit ${code}). Daemon mode can't answer prompts ` +
-    `(e.g. approving a symlink) — retry in the foreground to respond to it. ` +
-    `Sandy's own output is in the terminal.`,
-    RETRY,
-  );
+  const choice = await vscode.window.showErrorMessage(startFailureMessage(code), RETRY);
   if (choice !== RETRY) return;
   log("forceLegacy retry requested after --start failure");
   // Dispose the dead panel first so the retry doesn't leave a stale tab behind.

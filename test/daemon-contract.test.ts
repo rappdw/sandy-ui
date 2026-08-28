@@ -8,8 +8,7 @@ import {
   attachArgs,
   stopArgs,
   pruneOrphansArgs,
-  hasDaemonCapability,
-} from "../src/daemon/contract";
+  hasDaemonCapability, classifyStartExit, START_EXIT, startFailureMessage } from "../src/daemon/contract";
 
 describe("classifyAttachExit", () => {
   it("0 → ended", () => {
@@ -133,5 +132,83 @@ describe("hasDaemonCapability", () => {
 
   it("capabilities.daemonMode true → true", () => {
     expect(hasDaemonCapability({ capabilities: { daemonMode: true } })).toBe(true);
+  });
+});
+
+// --start's exit table (rappdw/sandy#221, sandy >= 1.7). These drive which
+// explanation the user gets on a failed launch, so a wrong mapping means a
+// confidently wrong message — the specific failure that motivated adding it
+// (telling the user "daemon mode can't prompt" when sandy HAD prompted and
+// they declined).
+describe("classifyStartExit", () => {
+  it("maps the known table", () => {
+    expect(classifyStartExit(0)).toBe("ready");
+    expect(classifyStartExit(6)).toBe("refused");
+    expect(classifyStartExit(7)).toBe("crash-loop");
+    expect(classifyStartExit(8)).toBe("timeout");
+  });
+
+  it("treats pre-#221 sandy's generic 1 as failed, not as any specific cause", () => {
+    expect(classifyStartExit(1)).toBe("failed");
+  });
+
+  it("treats unknown/absent codes as failed", () => {
+    for (const c of [2, 3, 4, 5, 9, 99, -1, undefined, null]) {
+      expect(classifyStartExit(c as number | undefined | null)).toBe("failed");
+    }
+  });
+
+  it("genuinely diverges from the --attach table for shared codes", () => {
+    // 3/4/5 mean something for --attach but nothing for --start. Prove the two
+    // classifiers disagree rather than just asserting one of them, so a future
+    // "simplification" that reuses classifyAttachExit here fails loudly.
+    // 3 and 4 are the divergent pair. 5 means "failed" in BOTH tables, so it
+    // proves nothing about divergence — assert it start-side only.
+    for (const c of [3, 4]) {
+      expect(classifyStartExit(c)).toBe("failed");
+      expect(classifyAttachExit(c)).not.toBe("failed");
+    }
+    expect(classifyStartExit(5)).toBe("failed");
+  });
+
+  it("START_EXIT constants match the documented codes", () => {
+    expect(START_EXIT).toEqual({ READY: 0, REFUSED: 6, CRASH_LOOP: 7, TIMEOUT: 8 });
+  });
+});
+
+// The wording IS the feature here — this branching exists because the previous
+// single message asserted a cause ("daemon mode can't answer prompts") that
+// upstream had made false. So pin the claims, not just the selection.
+describe("startFailureMessage", () => {
+  it("picks a distinct message per outcome", () => {
+    const msgs = [1, 6, 7, 8].map(startFailureMessage);
+    expect(new Set(msgs).size).toBe(4);
+  });
+
+  it("never claims daemon mode cannot prompt — upstream fixed that (sandy#221)", () => {
+    for (const c of [1, 6, 7, 8, undefined, null]) {
+      expect(startFailureMessage(c as number | undefined | null).toLowerCase())
+        .not.toContain("can't answer prompts");
+    }
+  });
+
+  it("refused does NOT promise that retrying will re-ask", () => {
+    // Exit 6 also covers hard refusals that are errors, not questions (a new
+    // escaping symlink since the last approval). Promising another prompt
+    // there sends the user to a button that reproduces the same failure.
+    const m = startFailureMessage(6).toLowerCase();
+    expect(m).not.toContain("will ask again");
+    expect(m).toContain("approval was not granted");
+    expect(m).toContain("terminal");   // point at sandy's own reason + fix
+  });
+
+  it("crash-loop and timeout name where the relevant log tail is", () => {
+    expect(startFailureMessage(7).toLowerCase()).toContain("container log tail");
+    expect(startFailureMessage(8).toLowerCase()).toContain("supervisor log tail");
+  });
+
+  it("includes the exit code, and degrades readably when there isn't one", () => {
+    expect(startFailureMessage(7)).toContain("exit 7");
+    expect(startFailureMessage(undefined)).toContain("exit unknown");
   });
 });
