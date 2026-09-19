@@ -3,6 +3,7 @@ import { launchCandidates, buildCleanEnv, spawnPty } from "./pty";
 import { OscEvent } from "./oscHandler";
 import { sweepStaleLocks, readLockPid, isPidAlive } from "./sandyState";
 import { shouldUseDaemon } from "../daemon/launchMode";
+import { panelTitle, TitleState } from "./panelTitle";
 import * as fs from "fs";
 import { checkPreflightApproval } from "../approval/preflight";
 import { PtySupervisor, Session } from "./supervisor";
@@ -177,6 +178,17 @@ export async function openTerminalPanel(
     }
   );
 
+  // Title is rendered from state, not string-patched. The old code did
+  // `title.startsWith("● ")` / `slice(2)` surgery, which breaks the moment the
+  // title has a prefix of its own — and an OSC-0 title used to overwrite the
+  // whole thing, losing the workspace. Keep the pieces separate and re-render.
+  let titleState: TitleState = { kind: "starting" };
+  let titleActivity = false;
+  const renderTitle = () => { panel.title = panelTitle(ws, titleState, titleActivity); };
+  const setTitleState = (next: TitleState) => { titleState = next; renderTitle(); };
+  const setTitleActivity = (on: boolean) => { titleActivity = on; renderTitle(); };
+  renderTitle();
+
   const mediaUri = (sub: string) =>
     panel.webview.asWebviewUri(vscode.Uri.joinPath(ctx.extensionUri, "media", "terminal", sub));
   panel.webview.html = renderHtml({
@@ -248,7 +260,7 @@ export async function openTerminalPanel(
           // the resizes register as distinct events.
           session = existingSession;
           supervisor.attach(ws!, panel);
-          panel.title = `Sandy (re-attached pid=${session.pty.pid})`;
+          setTitleState({ kind: "attached" });
           panel.webview.postMessage(<FromHost>{
             type: "data",
             data: `\r\n\x1b[2m[re-attached to existing sandy pid=${session.pty.pid}]\x1b[0m\r\n`,
@@ -306,7 +318,7 @@ export async function openTerminalPanel(
           });
           session = supervisor.beginDaemon(ws, startPty);
           supervisor.attach(ws, panel);
-          panel.title = "Sandy (starting…)";
+          setTitleState({ kind: "starting" });
 
           // Policy for what --start's exit means lives HERE, not in the
           // supervisor: beginDaemon() deliberately leaves it to the
@@ -334,7 +346,7 @@ export async function openTerminalPanel(
                   cols: lastCols, rows: lastRows,
                 });
                 supervisor.promoteToAttach(ws, attachPty);
-                panel.title = `Sandy (attached pid=${attachPty.pid})`;
+                setTitleState({ kind: "attached" });
                 log(`daemon: attached pid=${attachPty.pid}`);
               } catch (e: any) {
                 log(`daemon: --attach spawn failed: ${e?.message ?? e}`);
@@ -417,7 +429,7 @@ export async function openTerminalPanel(
               cols: m.cols || 80, rows: m.rows || 24,
             });
             log(`spawned: ${c.command} pid=${session.pty.pid}`);
-            panel.title = `Sandy (${c.command.split("/").pop()} ${c.args.join(" ")})`.trim();
+            setTitleState({ kind: "attached" });   // which candidate won is in the output channel
             break;
           } catch (e: any) {
             const msg = `${c.command}: ${e?.message ?? e}`;
@@ -434,7 +446,7 @@ export async function openTerminalPanel(
         supervisor.attach(ws, panel);
         // Title flip on exit (data flow + exit posting handled by supervisor).
         session.pty.onExit((code) => {
-          panel.title = `Sandy (exit ${code})`;
+          setTitleState({ kind: "exited", code });
         });
         break;
       }
@@ -485,7 +497,7 @@ export async function openTerminalPanel(
         catch (e: any) { log(`wake repaint failed: ${e?.message ?? e}`); }
         break;
       }
-      case "osc":    handleOsc(panel, m.event); break;
+      case "osc":    handleOsc(m.event, setTitleState, setTitleActivity); break;
       case "openExternal": {
         // From the web-links addon (click on a detected URL). Scheme guard is
         // defense in depth: the addon's regex only matches http(s), but this
@@ -552,7 +564,7 @@ export async function openTerminalPanel(
     if (e.webviewPanel.visible) {
       // Clear the OSC-notification badge — ● means "unseen activity", and
       // the user just looked (review finding B7).
-      if (panel.title.startsWith("● ")) panel.title = panel.title.slice(2);
+      setTitleActivity(false);
       panel.webview.postMessage({ type: "refit" });
     }
   });
@@ -625,14 +637,21 @@ async function maximizeEditorSpaceIfRequested(): Promise<void> {
   if (closeSide)   await tryRun("workbench.action.closeSidebar");
 }
 
-function handleOsc(panel: vscode.WebviewPanel, ev: OscEvent) {
+// Title changes go through the caller's state setters, not a raw panel.title
+// write: an OSC-0 title from inside the terminal is a DETAIL, and must not
+// clobber the workspace prefix the tab (and the OS window menu) sort on.
+function handleOsc(
+  ev: OscEvent,
+  setTitleState: (s: TitleState) => void,
+  setTitleActivity: (on: boolean) => void,
+) {
   switch (ev.kind) {
     case "notification": {
       const msg = ev.body ? `${ev.title} — ${ev.body}` : ev.title;
       vscode.window.showInformationMessage(`[OSC ${ev.code}] ${msg}`);
       // Tab badge — VSCode's webview API doesn't expose dot badges directly,
       // but title prefix is the common workaround.
-      if (!panel.title.startsWith("● ")) panel.title = "● " + panel.title;
+      setTitleActivity(true);
       break;
     }
     case "clipboard": {
@@ -642,7 +661,7 @@ function handleOsc(panel: vscode.WebviewPanel, ev: OscEvent) {
       break;
     }
     case "title": {
-      panel.title = ev.title;
+      setTitleState({ kind: "app", title: ev.title });
       break;
     }
     case "hyperlink": {

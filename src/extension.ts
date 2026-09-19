@@ -278,7 +278,13 @@ export function activate(ctx: vscode.ExtensionContext) {
         detail: `persisted  •  ${c.attached_clients ?? "?"} client(s)  •  click to attach`,
         workspacePath: ws,
       }));
-      const items = [...localItems, ...persistedItems];
+      // One alphabetical list rather than local-then-persisted: the point of
+      // this pick is FINDING a workspace among many, and scanning beats
+      // remembering which bucket a session landed in. The icon and detail
+      // still say attached / detached / persisted.
+      const byWorkspace = (a: QuickPickSessionItem, b: QuickPickSessionItem) =>
+        path.basename(a.workspacePath).localeCompare(path.basename(b.workspacePath), undefined, { sensitivity: "base" });
+      const items = [...localItems, ...persistedItems].sort(byWorkspace);
 
       const picked = await vscode.window.showQuickPick(items, {
         placeHolder: `${items.length} live sandy session${items.length === 1 ? "" : "s"} — pick to switch / re-attach`,

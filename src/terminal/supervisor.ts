@@ -1,6 +1,7 @@
 import * as cp from "child_process";
 import * as vscode from "vscode";
 import { spawnPty, PtyHandle, SpawnOpts } from "./pty";
+import { panelTitle } from "./panelTitle";
 
 // Session lifecycle owner. Each Session is keyed by workspace path: at most
 // one sandy per workspace at a time. State machine (direct backend):
@@ -218,7 +219,7 @@ export class PtySupervisor implements vscode.Disposable {
             type: "data",
             data: "\r\n\x1b[2m[local client detached — the sandy session persists on the host; relaunch to re-attach]\x1b[0m\r\n",
           });
-          detachedPanel.title = "Sandy (detached)";
+          detachedPanel.title = panelTitle(session.workspacePath, { kind: "detached" });
         }
         this.sessions.delete(session.id);
         this._onDidChange.fire({ kind: "client-detached", session });
