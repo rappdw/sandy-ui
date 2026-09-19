@@ -393,7 +393,7 @@
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
     "electron": "^41.10.2",
-    "esbuild": "^0.28.1",
+    "esbuild": "^0.28.2",
     "mocha": "^11.7.6",
     "typescript": "^5.4.0",
     "vitest": "^4.1.10"
