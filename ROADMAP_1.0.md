@@ -126,7 +126,7 @@ Nothing here needs sandy changes.
   change as *retry*, not *gone*, and reconcile against `--print-state`); restart-safe
   discovery; an `image_stale` surface (agent image only, full-mode only — no per-session
   proxy-stale bit exists).
-- **First run**: link sandy's stranger-facing walkthrough (https://rappdw.github.io/sandy/)
+- **First run** ✅: link sandy's stranger-facing walkthrough (https://rappdw.github.io/sandy/)
   from our walkthrough; set expectations that the first launch builds images and can take
   several minutes, and show progress for the full `--start` window (sandy allows 600s).
 - **Types** ✅: `workspace_path: string | null` (it can be `null` for legacy/orphaned

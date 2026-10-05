@@ -262,7 +262,7 @@
           {
             "id": "settingsTour",
             "title": "Settings & the approval model",
-            "description": "Schema-driven settings with Project/Global scope tabs and a verbatim pre-flight approval modal.",
+            "description": "Schema-driven settings with Project/Global scope tabs, and how sandy asks before using privileged project settings.",
             "media": {
               "markdown": "media/walkthrough/settingsTour.md"
             },
