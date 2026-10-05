@@ -14,6 +14,8 @@ import * as os from "os";
 import { parseSandySchema } from "../src/schema/parse";
 import { hasDaemonCapability } from "../src/daemon/contract";
 import { formatAge } from "../src/state/badge";
+import { parsePrintVersion, scrapeVersion } from "../src/schema/cache";
+import { asApprovalsReport, buildPreview } from "../src/approval/report";
 
 const FIXTURE = path.join(__dirname, "fixtures", "fake-sandy", "fake-sandy");
 
@@ -98,11 +100,10 @@ describeUnix("fake-sandy: --print-schema", () => {
 });
 
 describeUnix("fake-sandy: --version", () => {
-  it("default output regex-extracts 1.1.0 (mirrors cache.ts's trySandyVersion regex)", () => {
+  it("defaults to sandy 2.7.1 (scraped the way cache.ts's fallback does)", () => {
     const { stdout, code } = run(["--version"]);
     expect(code).toBe(0);
-    const m = stdout.match(/\b\d+\.\d+\.\d+(?:[\w.-]*)?\b/);
-    expect(m?.[0]).toBe("1.1.0");
+    expect(scrapeVersion(stdout)).toBe("2.7.1");
   });
 
   it("knobs/version overrides the output", () => {
@@ -111,6 +112,35 @@ describeUnix("fake-sandy: --version", () => {
     expect(stdout.trim()).toBe("sandy 9.9.9-custom");
     const m = stdout.match(/\b\d+\.\d+\.\d+(?:[\w.-]*)?\b/);
     expect(m?.[0]).toBe("9.9.9-custom");
+  });
+});
+
+describeUnix("fake-sandy: --print-version / --approvals (sandy 2.7 surface)", () => {
+  it("--print-version parses, like a curl install (no commit)", () => {
+    expect(parsePrintVersion(run(["--print-version"]).stdout)).toEqual({ version: "2.7.1", fullVersion: "2.7.1" });
+    writeKnob("version", "sandy 9.9.9-custom");
+    expect(parsePrintVersion(run(["--print-version"]).stdout)?.version).toBe("9.9.9-custom");
+  });
+
+  it("--print-schema is schema 4 and advertises --approvals", () => {
+    const parsed = parseSandySchema(JSON.parse(run(["--print-schema"]).stdout));
+    expect(parsed.schema_version).toBe(4);
+    expect(parsed.capabilities).toEqual({ daemonMode: true, approvalsReport: true });
+  });
+
+  it("--approvals reports everything resolved by default (exit 0), and knobs override it", () => {
+    const def = run(["--approvals", "--workspace", "/tmp/proj-ap"]);
+    expect(def.code).toBe(0);
+    const r = asApprovalsReport(JSON.parse(def.stdout))!;
+    expect(r).toMatchObject({ complete: true, unresolved: [], workspace: "/tmp/proj-ap" });
+    expect(buildPreview(r, () => ({ secret: false }))).toBeUndefined();
+
+    writeKnob("approvals", JSON.stringify({ complete: true, unresolved: ["dockerfile"],
+      gates: [{ gate: "dockerfile", status: "pending", dockerfile: "/tmp/proj-ap/.sandy/Dockerfile", context_files: ["Dockerfile"] }] }));
+    writeKnob("approvals-exit", "2");
+    const knobbed = run(["--approvals", "--workspace", "/tmp/proj-ap"]);
+    expect(knobbed.code).toBe(2);
+    expect(buildPreview(asApprovalsReport(JSON.parse(knobbed.stdout)), () => ({ secret: false }))?.body).toContain("PROJECT DOCKERFILE");
   });
 });
 

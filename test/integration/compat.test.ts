@@ -68,9 +68,9 @@ describe("Compatibility gate (fake-sandy) — non-blocking activation", function
     await assert.doesNotReject(() => Promise.resolve(vscode.commands.executeCommand("sandy.state.refresh")));
   });
 
-  it("stays active and responsive against a schema_version beyond the supported major (schema 3)", async () => {
-    writeKnob(stateDir, "version", "sandy 2.0.0");
-    writeKnob(stateDir, "schema-version", "3");
+  it("stays active and responsive against a schema_version newer than any this build knows (schema 5)", async () => {
+    writeKnob(stateDir, "version", "sandy 2.9.0");
+    writeKnob(stateDir, "schema-version", "5");
 
     const ext = vscode.extensions.getExtension(EXTENSION_ID);
     assert.ok(ext?.isActive, "extension should remain active with an unsupported schema_version");

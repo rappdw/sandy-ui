@@ -373,3 +373,11 @@ describe("findLongRunners", () => {
   });
 });
 
+
+// sandy reports `workspace_path: null` for legacy/orphaned sandboxes.
+describe("workspace_path: null", () => {
+  it("is treated like an absent path", () => {
+    const sb = { name: "old-1a2b3c4d", path: "/p", workspace_path: null } as SandySandbox;
+    expect(deriveBadge(sb, [], { supervisorRunningWorkspaces: new Set(["/w"]) })).not.toBe("running");
+  });
+});

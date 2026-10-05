@@ -10,7 +10,7 @@ export interface SandySandbox {
   // Emitted natively by sandy >= 1.0 (rappdw/sandy#19); may be absent on
   // orphan/legacy sandboxes. Typing it required was a lie the tree/badge
   // code already defended against.
-  workspace_path?: string;
+  workspace_path?: string | null;   // null for legacy/orphaned sandboxes (sandy reports it explicitly)
   created_version?: string;
   last_used_version?: string;
   created_at?: string;

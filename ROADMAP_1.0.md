@@ -129,7 +129,7 @@ Nothing here needs sandy changes.
 - **First run**: link sandy's stranger-facing walkthrough (https://rappdw.github.io/sandy/)
   from our walkthrough; set expectations that the first launch builds images and can take
   several minutes, and show progress for the full `--start` window (sandy allows 600s).
-- **Types**: `workspace_path: string | null` (it can be `null` for legacy/orphaned
+- **Types** ✅: `workspace_path: string | null` (it can be `null` for legacy/orphaned
   sandboxes); bring `fake-sandy` to schema 4 so integration tests exercise the current
   shape.
 

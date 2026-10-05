@@ -152,7 +152,7 @@ export function findLongRunners(
     if (ageMs <= thresholdMs) continue;
     const age = formatAge(c.started_at, nowD);
     if (!age) continue;
-    const workspacePath = sandboxes.find(s => s.name === c.sandbox)?.workspace_path;
+    const workspacePath = sandboxes.find(s => s.name === c.sandbox)?.workspace_path ?? undefined;
     results.push({ sandboxName: c.sandbox, workspacePath, age });
   }
   return results;

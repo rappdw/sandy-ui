@@ -4,7 +4,10 @@
 # Used by test/fake-sandy.test.ts (vitest, runs everywhere) and
 # test/integration/daemon.test.ts (@vscode/test-electron, CI only).
 #
-# What this fakes: --version, --print-schema (daemon-capable cli_flags +
+# Shaped like sandy 2.7.x (schema_version 4) by default.
+#
+# What this fakes: --version, --print-version, --approvals (all gates
+# resolved unless knobbed), --print-schema (daemon-capable cli_flags +
 # a couple of config keys), --print-state (sandboxes/running_containers
 # derived from on-disk session files), --start/--attach/--stop (the
 # two-phase daemon launch + teardown), --prune-orphans, plus a bare/
@@ -33,10 +36,14 @@
 #                              clean up — the realistic behavior modelled)
 #   knobs/start-exit         — numeric; --start exits with this code
 #   knobs/attach-exit        — numeric; --attach exits with this code immediately
-#   knobs/version             — overrides --version output (and --print-schema's
-#                              sandy.version, numeric part extracted)
+#   knobs/version             — overrides --version output (default "sandy 2.7.1"),
+#                              and --print-schema's / --print-version's version
+#                              (numeric part extracted)
 #   knobs/no-daemon-flags     — presence-only; --print-schema omits daemon cli_flags
-#   knobs/schema-version      — numeric; --print-schema's schema_version (default 1) —
+#   knobs/approvals           — raw JSON --approvals prints instead of its default
+#                              all-resolved report
+#   knobs/approvals-exit      — numeric; --approvals exit code (default 0)
+#   knobs/schema-version      — numeric; --print-schema's schema_version (default 4) —
 #                              drives the sandy-ui compat gate (rappdw/sandy-ui#30)
 #   knobs/orphans             — numeric; --print-state's orphan_networks (default 0)
 #   knobs/attach-signal-death — presence-only; --attach does NOT install the
@@ -136,12 +143,60 @@ set_attached_clients() {
 }
 
 cmd_version() {
-  local v="sandy 1.1.0"
+  local v="sandy 2.7.1"
   if [ -n "${FAKE_SANDY_STATE:-}" ] && [ -f "$FAKE_SANDY_STATE/knobs/version" ]; then
     v=$(cat "$FAKE_SANDY_STATE/knobs/version")
   fi
   echo "$v"
   exit 0
+}
+
+# The numeric version, honouring knobs/version (shared by --print-schema and
+# --print-version).
+fake_version() {
+  local ver="2.7.1"
+  if [ -n "${FAKE_SANDY_STATE:-}" ] && [ -f "$FAKE_SANDY_STATE/knobs/version" ]; then
+    local extracted
+    extracted=$(cat "$FAKE_SANDY_STATE/knobs/version" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.-]*' | head -1 || true)
+    if [ -n "$extracted" ]; then ver="$extracted"; fi
+  fi
+  echo "$ver"
+}
+
+fake_schema_version() {
+  if [ -n "${FAKE_SANDY_STATE:-}" ] && [ -f "$FAKE_SANDY_STATE/knobs/schema-version" ]; then
+    cat "$FAKE_SANDY_STATE/knobs/schema-version"
+  else
+    echo 4
+  fi
+}
+
+# Like a curl install: no commit, so full_version == version.
+cmd_print_version() {
+  local ver; ver=$(fake_version)
+  printf '{"schema_version":%s,"version":"%s","commit":"","full_version":"%s"}\n' "$(fake_schema_version)" "$ver" "$ver"
+  exit 0
+}
+
+cmd_approvals() {
+  local ws=""
+  while [ $# -gt 0 ]; do
+    case "$1" in --workspace) shift; ws="${1:-}" ;; esac
+    shift || true
+  done
+  local code=0
+  if [ -n "${FAKE_SANDY_STATE:-}" ] && [ -f "$FAKE_SANDY_STATE/knobs/approvals-exit" ]; then
+    code=$(cat "$FAKE_SANDY_STATE/knobs/approvals-exit")
+  fi
+  if [ -n "${FAKE_SANDY_STATE:-}" ] && [ -f "$FAKE_SANDY_STATE/knobs/approvals" ]; then
+    cat "$FAKE_SANDY_STATE/knobs/approvals"
+  else
+    printf '{"schema_version":4,"workspace":"%s","complete":true,"error":null,"unresolved":[],"gates":[' "$ws"
+    printf '{"gate":"passive_privileged","status":"not_applicable","keys":[],"sources":[]},'
+    printf '{"gate":"symlinks","status":"not_applicable","symlinks":[],"new":[]},'
+    printf '{"gate":"dockerfile","status":"not_applicable","context_files":[],"session_created":false}]}\n'
+  fi
+  exit "$code"
 }
 
 cmd_print_schema() {
@@ -150,22 +205,14 @@ cmd_print_schema() {
     no_daemon=1
   fi
 
-  local ver="1.1.0"
-  if [ -n "${FAKE_SANDY_STATE:-}" ] && [ -f "$FAKE_SANDY_STATE/knobs/version" ]; then
-    local extracted
-    extracted=$(cat "$FAKE_SANDY_STATE/knobs/version" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.-]*' | head -1 || true)
-    if [ -n "$extracted" ]; then ver="$extracted"; fi
-  fi
+  local ver; ver=$(fake_version)
 
   local cli_flags="[]"
   if [ "$no_daemon" -eq 0 ]; then
-    cli_flags='[{"name":"--start"},{"name":"--attach"},{"name":"--stop"},{"name":"--prune-orphans"}]'
+    cli_flags='[{"name":"--start"},{"name":"--attach"},{"name":"--stop"},{"name":"--prune-orphans"},{"name":"--approvals"}]'
   fi
 
-  local schema_ver="1"
-  if [ -n "${FAKE_SANDY_STATE:-}" ] && [ -f "$FAKE_SANDY_STATE/knobs/schema-version" ]; then
-    schema_ver=$(cat "$FAKE_SANDY_STATE/knobs/schema-version")
-  fi
+  local schema_ver; schema_ver=$(fake_schema_version)
 
   cat <<JSON
 {
@@ -224,7 +271,7 @@ cmd_print_state() {
     fi
   done
 
-  printf '{"schema_version":1,"docker_reachable":true,"sandboxes":[%s],"approvals":[],"running_containers":[%s],"orphan_networks":%s}\n' \
+  printf '{"schema_version":4,"docker_reachable":true,"sandboxes":[%s],"approvals":[],"running_containers":[%s],"orphan_networks":%s}\n' \
     "$sandboxes_json" "$containers_json" "$orphans"
   exit 0
 }
@@ -351,6 +398,8 @@ log_invocation "$@"
 
 case "${1:-}" in
   --version)        cmd_version ;;
+  --print-version)  cmd_print_version ;;
+  --approvals)      shift; cmd_approvals "$@" ;;
   --print-schema)    cmd_print_schema ;;
   --print-state)     cmd_print_state ;;
   --validate-config) cmd_validate_config ;;
