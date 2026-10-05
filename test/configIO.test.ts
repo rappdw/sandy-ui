@@ -193,6 +193,37 @@ describe("configPathFor / secretsPathFor", () => {
   });
 });
 
+describe("saveScope writes a file only when something in it changes", () => {
+  // The settings form now sends only changed keys, so most Saves send nothing.
+  // A no-op Save must be a true no-op: writeKvAtomic rewrites the whole file
+  // (sorted, comments and unrecognized lines dropped, mode reset), and used to
+  // run unconditionally.
+  it("does not create a missing config (or its .sandy/ dir) when nothing changed", () => {
+    saveScope("workspace", tmp, schema, {});
+    expect(fs.existsSync(workspaceConfigPath(tmp))).toBe(false);
+    expect(fs.existsSync(path.join(tmp, ".sandy"))).toBe(false);
+  });
+
+  it("leaves an existing config byte-identical — comments and all — when nothing changed", () => {
+    const cfg = workspaceConfigPath(tmp);
+    fs.mkdirSync(path.dirname(cfg), { recursive: true });
+    const original = "# my sandy config\nSANDY_AGENT=claude\n\n# keep this\nexport FOO=1\n";
+    fs.writeFileSync(cfg, original);
+    saveScope("workspace", tmp, schema, {});
+    expect(fs.readFileSync(cfg, "utf8")).toBe(original);
+  });
+
+  it("leaves an existing secrets file byte-identical when only config changes", () => {
+    const sec = workspaceSecretsPath(tmp);
+    fs.mkdirSync(path.dirname(sec), { recursive: true });
+    const original = "# secrets\nLEGACY_SECRET=still-here\n";
+    fs.writeFileSync(sec, original);
+    saveScope("workspace", tmp, schema, { SANDY_AGENT: "codex" });
+    expect(fs.readFileSync(sec, "utf8")).toBe(original);
+    expect(readKv(workspaceConfigPath(tmp))).toEqual({ SANDY_AGENT: "codex" });
+  });
+});
+
 describe("saveScope (workspace tmp-dir, never touches HOME)", () => {
   it("writes config keys to <ws>/.sandy/config and secrets to <ws>/.sandy/.secrets", () => {
     saveScope("workspace", tmp, schema, {

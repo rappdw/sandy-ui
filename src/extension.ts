@@ -16,7 +16,10 @@ import { pruneOrphansArgs, stopArgs, STOP_EXIT } from "./daemon/contract";
 import { PtySupervisor, Session } from "./terminal/supervisor";
 import { runSynthkitCommand } from "./synthkit/commands";
 import { getCachedSchema } from "./schema/cache";
-import { evaluateCompat, describeVerdict, SANDY_MIN_VERSION, SUPPORTED_SCHEMA_VERSIONS } from "./schema/compat";
+import { evaluateCompat, describeVerdict, compatNotificationKey, SANDY_MIN_VERSION, SUPPORTED_SCHEMA_VERSIONS } from "./schema/compat";
+
+// globalState key: the last compat state the user was notified about (see runCompatCheck).
+const COMPAT_NOTIFIED_KEY = "sandy.compat.lastNotified";
 import { deriveDoctorStatus, DoctorStatus } from "./doctor";
 import type { Schema } from "./settings/configIO";
 import schemaMock from "./mocks/schema.json";
@@ -630,13 +633,21 @@ async function runCompatCheck(ctx: vscode.ExtensionContext, out: vscode.OutputCh
       + `(declared floor: sandy >= ${SANDY_MIN_VERSION}, schema in [${SUPPORTED_SCHEMA_VERSIONS.join(", ")}])`
     );
 
-    if (verdict.kind === "too-old" || verdict.kind === "schema-unsupported-major") {
-      vscode.window.showErrorMessage(`Sandy: ${describeVerdict(verdict).message}`);
-    } else if (verdict.kind === "schema-too-new") {
-      vscode.window.showWarningMessage(`Sandy: ${describeVerdict(verdict).message}`);
+    // Severity comes from describeVerdict, so the gate's message and its
+    // loudness can't drift apart. Each distinct state notifies ONCE per sandy
+    // version: 0.8.2 fired on every window activation, which is half of what
+    // made its (wrong) error so disruptive. The log line above still records
+    // every run. "sandy-missing"/"ok" have no key and never notify — a missing
+    // sandy already gets its own fallback UX (tree placeholder, settings banner).
+    const notifyKey = compatNotificationKey(res.sandy_version, res.schema_version, verdict);
+    if (notifyKey && ctx.globalState.get<string>(COMPAT_NOTIFIED_KEY) !== notifyKey) {
+      void ctx.globalState.update(COMPAT_NOTIFIED_KEY, notifyKey);
+      const d = describeVerdict(verdict);
+      if (d.severity === "error") vscode.window.showErrorMessage(`Sandy: ${d.message}`);
+      else vscode.window.showWarningMessage(`Sandy: ${d.message}`);
+    } else if (notifyKey) {
+      out.appendLine(`[${new Date().toISOString()}] compat: already notified for ${notifyKey}; not repeating`);
     }
-    // "sandy-missing"/"ok" — nothing to surface here; a missing sandy already
-    // gets its own fallback UX (tree placeholder, settings banner).
 
     // Loud mock-schema fallback (rappdw/sandy-ui#30): sandy IS present (we got
     // a version) but --print-schema itself failed, so settings render against

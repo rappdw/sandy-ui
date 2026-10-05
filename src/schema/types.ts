@@ -8,7 +8,12 @@ export interface SandyMeta {
   sandbox_min_compat?: string;
 }
 
-export type FieldType = "string" | "int" | "bool" | "enum" | "secret" | "agent_combo";
+// Runtime list so tests can check it against real `sandy --print-schema`
+// output. The settings webview keeps its own copy (FieldDef in
+// media/settings/src/settings.ts — host and webview share no files by
+// design); test/schema-real-fixture.test.ts fails if the two drift.
+export const FIELD_TYPES = ["string", "path", "int", "bool", "enum", "secret", "agent_combo"] as const;
+export type FieldType = typeof FIELD_TYPES[number];
 
 export interface SandyConfigKey {
   name: string;
@@ -21,6 +26,7 @@ export interface SandyConfigKey {
   max?: number;
   sources?: Array<"home_config" | "home_secrets" | "workspace_config" | "env">;
   passive_approval_required?: boolean;
+  stability?: string;   // "stable" | "experimental" | "deprecated"
 }
 
 export interface SandyConfigSection {

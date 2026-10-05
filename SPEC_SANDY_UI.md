@@ -307,19 +307,26 @@ Running sandy-ui has the same privilege as running `sandy` directly from a shell
 
 ```json
 {
-  "ui_version": "0.8.0",
-  "sandy_min_version": "1.0.0",
-  "sandy_schema_versions_supported": [1]
+  "ui_version": "0.8.3",
+  "sandy_min_version": "2.6.0",
+  "sandy_schema_versions_supported": [4],
+  "sandy_schema_versions_best_effort": [2, 3],
+  "sandy_major": 2
 }
 ```
 
-Enforced by `src/schema/compat.ts` — a pure `evaluateCompat(sandyVersion, schemaVersion)` gate (`SANDY_MIN_VERSION` / `SUPPORTED_SCHEMA_VERSIONS` are the single source of truth these consts are copied from) plus `describeVerdict()` for the human-facing message. `extension.ts` runs it once at activation against the same cached `--print-schema` resolution the settings panel uses:
+Enforced by `src/schema/compat.ts` — a pure `evaluateCompat(sandyVersion, schemaVersion)` gate (`SANDY_MIN_VERSION` / `SUPPORTED_SCHEMA_VERSIONS` / `BEST_EFFORT_SCHEMA_VERSIONS` / `SUPPORTED_SANDY_MAJOR` are the single source of truth these values are copied from) plus `describeVerdict()` for the human-facing message and its severity. `extension.ts` runs it once at activation against the same cached `--print-schema` resolution the settings panel uses.
+
+**Gate on `schema_version`, not the version string** — sandy's own advice, since `X.Y.Z-dev` compares equal to `X.Y.Z`. The version is consulted only for its *major* (reliable) and as a fallback when the schema can't be determined.
 
 - **sandy not on PATH**: nothing extra here — already covered by the existing "sandy unavailable" tree/settings fallback UX.
-- **sandy older than `sandy_min_version`**: actionable error notification ("sandy X found — sandy-ui requires sandy ≥ 1.0.0. Update sandy, then reload the window.").
-- **Schema version in `supported` list** (the normal case, including sandy newer than `sandy_min_version`): no notification.
-- **Schema version exactly one past `supported`'s max** (sandy newer than UI knows, by one): soft-warn notification — "sandy's config schema (vY) is newer than sandy-ui supports (v1) — proceeding with best-effort rendering; some fields may not appear." The schema's additive-change rule (see [SPEC_INTROSPECTION.md](SPEC_INTROSPECTION.md)) means new keys appear without breaking the UI; the UI ignores them.
-- **Schema version more than one past `supported`'s max** (a major schema jump, e.g. sandy schema 3, UI supports 1): actionable error notification, same severity as the version-floor case.
+- **Schema 4** (sandy ≥ 2.6.0): no notification.
+- **Schema 2 or 3** (sandy 2.0–2.5): *warning* — "older than the 2.6.0 this sandy-ui is tested with; it should work." The 2→3→4 bumps removed only handoff/relay fields sandy-ui never reads, so these render identically.
+- **sandy 1.x** (major 1, or schema 1): *error* — too old; sandy 2.x refuses 1.x sandboxes anyway.
+- **An unknown schema within sandy major 2**: *warning* — "newer than sandy-ui knows; sandy-ui keeps working." sandy's written policy makes this safe: within a major, removing an emitted field needs a README `## Deprecated` entry announced at that major's .0, or an exception requiring every known consumer (sandy-ui is one) to be named and to have migrated first.
+- **A new sandy major** (3.0+): *error*, regardless of schema — a new major may change what a field means with no notice, as 2.0.0 did with `sandboxes[].features`.
+
+**Each state notifies once per sandy version**, keyed in globalState (`sandy.compat.lastNotified`) — never on every window activation. (0.8.2 shipped a `[1]`-only gate that put an *error* telling users to "update sandy-ui before continuing" in front of every window on sandy 2.x, when no newer sandy-ui existed. Frequency was half of what made that bad; no message now tells the user to do something before continuing.)
 
 **Non-blocking by design**: none of the above disables the extension, blocks activation, or refuses to launch — every branch above is an *informational* notification (plus a line logged to the "Sandy State" output channel every run, regardless of verdict). A genuinely incompatible sandy still surfaces its own errors at launch time; sandy-ui's job here is to make the mismatch legible earlier, not to gate the CLI's own enforcement. This mirrors the existing `--validate-config` precedent (errors are logged, never block launch).
 
@@ -329,11 +336,13 @@ Separately, a present-but-broken sandy (on PATH, but `--print-schema` itself fai
 
 Independent from sandy. `sandy-ui` releases on its own schedule; compatibility is explicit via the `sandy_schema_versions_supported` list, not by matching version numbers. This means:
 
-- A sandy point release (0.12.1) that adds a new passive key: UI continues to work unchanged; the new key appears in the settings form on next schema refresh, rendered with whatever default UI widget matches its `type`.
-- A sandy minor release (0.13.0) that deprecates a key: UI continues to work; the deprecated key shows a deprecation note if the schema flags it.
-- A sandy major release (1.0.0) that bumps schema to v2: the UI refuses to launch until it's updated to a version that supports schema v2.
+- A sandy release that adds a key: UI continues to work unchanged; the new key appears in the settings form on next schema refresh, rendered with the widget matching its `type`. A `type` the UI has never seen renders as a plain text field rather than failing (0.8.3 — sandy 2.x's new `path` type previously aborted the whole form).
+- A sandy release that deprecates a key (`stability: "deprecated"` in `--print-schema`): the key is hidden from the form unless the user's file already sets it, in which case it renders as plain text with a deprecation note so it can be cleared. Some deprecated keys (e.g. `SANDY_RELAY`) are refused by sandy at *any* value, so offering a control for one would invite a value that breaks every launch.
+- A sandy release that bumps `schema_version` within major 2: a one-time warning; the UI keeps working. A new sandy major (3.0+): a one-time error notification; the UI still keeps working. Neither blocks launch — see §Compatibility.
 
-Each UI release pins a tested range in its README and on the download page. Users who downgrade sandy below the UI's `sandy_min_version` get a clear error on next launch, with the fix command.
+Each UI release pins a tested range in its README and release notes. Users on a sandy below the UI's `sandy_min_version` get a one-time notification naming the fix: an error for sandy 1.x, a warning for sandy 2.0–2.5.
+
+**Settings Save is disabled in 0.8.3** (rappdw/sandy-ui#53) — the host refuses every save, and the panel is read-only — because keys were being routed to the wrong file. When re-enabled, **Save writes only what changed.** The form sends a key only when its value differs from what the file would display (`media/settings/src/saveRules.ts`); the host merges into the existing file, keeping every key it isn't sent. Untouched keys — including schema defaults the form pre-fills — are never written, so sandy's own defaults keep applying and a deprecated or default-less key can't be written by accident.
 
 ## Distribution
 

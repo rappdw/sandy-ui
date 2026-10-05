@@ -14,6 +14,15 @@ import {
 import schemaMock from "../mocks/schema.json";
 import { getCachedSchema } from "../schema/cache";
 
+// Settings Save is OFF in 0.8.3 — rappdw/sandy-ui#53. Three review passes of
+// the hotfix found the save path writing keys to the wrong file: 16 non-secret
+// privileged keys (SANDY_ALLOW_NO_ISOLATION, SANDY_SKIP_PERMISSIONS,
+// SANDY_ALLOW_HOSTS, …) were routed into .secrets, where the form could neither
+// show nor clear them. While this is false the host refuses EVERY save, no
+// matter what the webview sends; the webview's read-only view is presentation
+// only. Flip it once every item in #53 is done and tested.
+const SETTINGS_SAVE_ENABLED = false;
+
 const out = vscode.window.createOutputChannel("Sandy Settings");
 const log = (msg: string) => out.appendLine(`[${new Date().toISOString()}] ${msg}`);
 
@@ -84,6 +93,7 @@ export function openSettingsPanel(ctx: vscode.ExtensionContext) {
 
         panel.webview.postMessage({
           type: "schema",
+          readOnly: !SETTINGS_SAVE_ENABLED,
           schema,
           source: { kind: resolution.source, error: resolution.error },
           scopes: {
@@ -106,6 +116,11 @@ export function openSettingsPanel(ctx: vscode.ExtensionContext) {
         break;
       }
       case "save": {
+        if (!SETTINGS_SAVE_ENABLED) {
+          log(`save refused (scope=${m.scope}): saving from the Settings panel is disabled in this build — rappdw/sandy-ui#53`);
+          vscode.window.showWarningMessage("Sandy: saving from the Settings panel is turned off in this version. Edit the config file directly for now.");
+          break;
+        }
         const scope = m.scope as Scope;
         const incoming = m.values as Record<string, string>;
         const clearSecrets = (m.clearSecrets as string[] | undefined) ?? [];
@@ -148,7 +163,13 @@ export function openSettingsPanel(ctx: vscode.ExtensionContext) {
           }
           const wroteSecrets = Object.keys(incoming).some(k => incoming[k] !== "" && verifySecrets[k] != null);
           vscode.window.showInformationMessage(`Saved to ${configTarget}${wroteSecrets ? ` and ${secretsTarget}` : ""}`);
-          panel.webview.postMessage({ type: "saved", scope });
+          // Send back the file as it now is: the form's baseline must track
+          // the file, or an edit that is later reverted compares as unchanged
+          // and is never saved. Config VALUES only — secrets travel as
+          // presence flags, exactly as in the initial state message.
+          const secretsPresent: Record<string, boolean> = {};
+          for (const k of Object.keys(verifySecrets)) secretsPresent[k] = true;
+          panel.webview.postMessage({ type: "saved", scope, values: verifyConfig, secretsPresent });
         } catch (e: any) {
           log(`save failed: ${e?.message ?? e}`);
           vscode.window.showErrorMessage(`Save failed: ${e?.message ?? e}`);

@@ -1,10 +1,11 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import type { FieldType } from "../schema/types";
 
 export interface FieldDef {
   key: string;
-  type: "string" | "int" | "bool" | "enum" | "agent_combo" | "secret";
+  type: FieldType;   // single source: src/schema/types.ts FIELD_TYPES
   tier: "home" | "workspace" | "secrets";
   privileged?: boolean;
   pattern?: string;
@@ -13,6 +14,7 @@ export interface FieldDef {
   options?: string[];
   default?: unknown;
   description?: string;
+  stability?: string;   // passed through so the webview can hide deprecated keys
 }
 
 export interface Schema {
@@ -110,12 +112,16 @@ export function saveScope(
   const existingConfig  = readKv(configTarget);
   const existingSecrets = readKv(secretsTarget);
 
+  // Write a file only when something in it changes. writeKvAtomic rewrites the
+  // whole file — sorted, without comments or unrecognized lines, mode reset —
+  // so writing unconditionally turned a no-op Save into a reformat, and
+  // created an empty config (plus its .sandy/ dir) that wasn't there before.
   const mergedConfig: Record<string, string> = { ...existingConfig };
   for (const [k, v] of Object.entries(config)) {
     if (v === "") delete mergedConfig[k];
     else mergedConfig[k] = v;
   }
-  writeKvAtomic(configTarget, mergedConfig, 0o644);
+  if (Object.keys(config).length > 0) writeKvAtomic(configTarget, mergedConfig, 0o644);
 
   const byKey = new Map(schema.fields.map(f => [f.key, f]));
   const isSecretKey = (k: string) => { const f = byKey.get(k); return f?.tier === "secrets" || f?.type === "secret"; };
@@ -125,7 +131,7 @@ export function saveScope(
   const nonEmptySecrets = Object.fromEntries(Object.entries(secrets).filter(([, v]) => v !== ""));
   const mergedSecrets = { ...existingSecrets, ...nonEmptySecrets };
   for (const k of verifiedClears) delete mergedSecrets[k];
-  if (Object.keys(nonEmptySecrets).length > 0 || Object.keys(existingSecrets).length > 0 || verifiedClears.length > 0) {
+  if (Object.keys(nonEmptySecrets).length > 0 || verifiedClears.length > 0) {
     writeKvAtomic(secretsTarget, mergedSecrets, 0o600);
   }
 

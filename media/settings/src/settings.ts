@@ -7,11 +7,13 @@
 
 export {}; // mark as module so local types don't leak into global scope
 
+import { boolChecked, displayValue, baselineValue, enumOptions } from "./saveRules";
+
 type Scope = "home" | "workspace";
 
 interface FieldDef {
   key: string;
-  type: "string" | "int" | "bool" | "enum" | "agent_combo" | "secret";
+  type: "string" | "path" | "int" | "bool" | "enum" | "agent_combo" | "secret";
   tier: "home" | "workspace" | "secrets";
   privileged?: boolean;
   pattern?: string;
@@ -20,6 +22,7 @@ interface FieldDef {
   options?: string[];
   default?: unknown;
   description?: string;
+  stability?: string;   // "stable" | "experimental" | "deprecated" (sandy --print-schema)
 }
 
 interface Schema {
@@ -43,6 +46,10 @@ interface PersistedState {
   schema: Schema | null;
   activeScope: Scope;
   scopes: { home: ScopeState; workspace: ScopeState };
+  // "sparse": `form` holds only unsaved edits (0.8.3+). Absent = an older
+  // build's full snapshot of every field, which must NOT be restored — see the
+  // restore block.
+  formModel?: "sparse";
 }
 
 interface SchemaSource {
@@ -51,8 +58,8 @@ interface SchemaSource {
 }
 
 type FromHost =
-  | { type: "schema"; schema: Schema; source: SchemaSource; scopes: { home: ScopeFromHost; workspace: ScopeFromHost | null } }
-  | { type: "saved"; scope: Scope };
+  | { type: "schema"; schema: Schema; source: SchemaSource; scopes: { home: ScopeFromHost; workspace: ScopeFromHost | null }; readOnly?: boolean }
+  | { type: "saved"; scope: Scope; values?: Record<string, string>; secretsPresent?: Record<string, boolean> };
 
 interface ScopeFromHost {
   configPath: string;
@@ -96,6 +103,10 @@ type ToHost =
   let schemaSource: SchemaSource | null = null;
   let activeScope: Scope = "workspace";  // default to project; falls back to home if no workspace
   // Values captured at save-click, committed on the host's "saved" ack.
+  // Read-only until the host says otherwise. 0.8.3 ships with Settings Save
+  // turned off (rappdw/sandy-ui#53) and the host refuses saves regardless; this
+  // only makes the panel say so instead of offering controls that do nothing.
+  let readOnly = true;
   let pendingSave: { scope: Scope; values: Record<string, string>; clearSecrets: string[] } | null = null;
   const emptyScope = (): ScopeState => ({
     configPath: "", secretsPath: "",
@@ -140,6 +151,13 @@ type ToHost =
     activeScope = persisted.activeScope || "workspace";
     Object.assign(scopes.home, persisted.scopes?.home ?? {});
     Object.assign(scopes.workspace, persisted.scopes?.workspace ?? {});
+    // Older builds persisted a snapshot of EVERY field as "drafts". Restoring
+    // one would replay stale values over anything changed in the file since,
+    // so it is discarded. The cost is losing unsaved edits once, on upgrade.
+    if (persisted.formModel !== "sparse") {
+      scopes.home.form = {}; scopes.home.initial = {};
+      scopes.workspace.form = {}; scopes.workspace.initial = {};
+    }
   }
   // A restored session that already has a schema skips straight to the form
   // — only a cold boot (no getState yet) shows the loading hint.
@@ -154,13 +172,18 @@ type ToHost =
     target.exists = !!src.exists;
     target.secretsPresent = src.secretsPresent || {};
     target.available = true;
-    if (!target.initial || Object.keys(target.initial).length === 0) target.initial = { ...target.values };
-    if (!target.form    || Object.keys(target.form).length    === 0) target.form    = { ...target.values };
+    // s.form holds ONLY the user's unsaved edits; untouched keys display
+    // straight from s.values. The old model copied every file value into
+    // form, so after a hide/show (or any edit) a stale snapshot was compared
+    // against the current file — overwriting changes made in an editor.
+    target.form = target.form ?? {};
+    target.initial = target.initial ?? {};
   }
 
   window.addEventListener("message", (e: MessageEvent) => {
     const m = e.data as FromHost;
     if (m.type === "schema") {
+      readOnly = m.readOnly !== false;
       schema = m.schema;
       schemaSource = m.source;
       ingestScope(scopes.home, m.scopes.home);
@@ -183,19 +206,25 @@ type ToHost =
       const v = usePending ? pendingSave!.values : collect();
       const clearedKeys = usePending ? pendingSave!.clearSecrets : [];
       pendingSave = null;
-      scopes[scope].initial = { ...v };
-      scopes[scope].form    = { ...v };
-      // After save, any non-blank secret value in the form is now stored.
-      for (const f of (schema?.fields ?? [])) {
-        if ((f.type === "secret" || f.tier === "secrets") && v[f.key]) {
-          scopes[scope].secretsPresent[f.key] = true;
+      // The host re-read the file after writing it; that is the new baseline.
+      // Without this, the baseline stayed at the PRE-save file, so an edit
+      // that was then reverted compared as "unchanged" and was never sent —
+      // a setting could stay on in the file while the form showed it off.
+      if (m.values) scopes[scope].values = m.values;
+      // Drafts are now in the file. `initial` is left empty: assigning the
+      // payload to it used to copy typed secrets into persisted webview state.
+      scopes[scope].form = {};
+      scopes[scope].initial = {};
+      if (m.secretsPresent) {
+        scopes[scope].secretsPresent = { ...m.secretsPresent };
+      } else {
+        // Older host without the fields: infer presence from what was sent.
+        for (const f of (schema?.fields ?? [])) {
+          if ((f.type === "secret" || f.tier === "secrets") && v[f.key]) {
+            scopes[scope].secretsPresent[f.key] = true;
+          }
         }
-      }
-      // Cleared secrets flip presence off. The row's clearSecret dataset
-      // marker is DOM-only and lives on the node renderActive() below is
-      // about to discard, so there's no separate "drop the marker" step.
-      for (const k of clearedKeys) {
-        scopes[scope].secretsPresent[k] = false;
+        for (const k of clearedKeys) scopes[scope].secretsPresent[k] = false;
       }
       saveState();
       renderActive();  // refresh badges
@@ -231,6 +260,21 @@ type ToHost =
   });
 
   // ---- Render active scope -------------------------------------------------
+  // What a control will ACTUALLY hold when rendered from the file and left
+  // untouched. The browser rewrites some values as they're set — a number input
+  // blanks anything it can't parse (`"4"` with quotes, `4 # comment`), a text
+  // input strips line breaks (CRLF files). Comparing against the raw file value
+  // made an untouched field look changed, and the save rewrote or DELETED it.
+  // So measure: render a throwaway control the same way and read it back.
+  function domBaseline(f: FieldDef, fileValue: string | undefined): string {
+    const pure = baselineValue(f, fileValue);
+    if (f.type === "bool" || f.type === "enum" || f.type === "agent_combo" || f.type === "secret") return pure;
+    const probe = document.createElement("input");
+    probe.type = f.type === "int" ? "number" : "text";
+    probe.value = pure;
+    return probe.value;
+  }
+
   function renderActive(): void {
     if (!schema) return;
     const s = scopes[activeScope];
@@ -251,11 +295,56 @@ type ToHost =
       // privileged keys saved in home scope are user-set so no approval is
       // needed. The yellow border + workspace-tab warning banner do the
       // visual differentiation.
-      form.appendChild(renderField(f, s.form[f.key] ?? (f.default as string | undefined), s.secretsPresent));
+      // Deprecated keys: sandy is retiring them, and some (SANDY_RELAY) it now
+      // refuses at ANY value — offering a control for one invites the user to
+      // write a value that breaks every launch. Hide them unless the user's file
+      // already sets one; then show it as plain text so it can be cleared.
+      const inFile = s.values[f.key] !== undefined;
+      if (f.stability === "deprecated" && !inFile) continue;
+      const eff: FieldDef = f.stability === "deprecated"
+        ? { ...f, type: "string", description: `Deprecated: current sandy may refuse this key. Clear it to remove it from the file.${f.description ? " " + f.description : ""}` }
+        : f;
+      const shownRaw = displayValue(eff, s.form[f.key] ?? s.values[f.key]);
+      const shown = shownRaw == null ? undefined : String(shownRaw);
+      const baseline = domBaseline(eff, s.values[f.key]);
+
+      // One field must never take down the form. Before this guard, a single
+      // throw here (an unrecognized type) silently dropped every later field.
+      try {
+        form.appendChild(renderField(eff, shown, s.secretsPresent, baseline));
+      } catch (e) {
+        const err = e as { message?: string };
+        fail(`renderField(${f.key})`, e);
+        const row = document.createElement("div");
+        row.className = "row";
+        row.textContent = `${f.key}: couldn't render this setting (${err?.message ?? String(e)}). See the "Sandy Settings" output channel.`;
+        form.appendChild(row);
+      }
     }
+    applyReadOnly(s);
   }
 
-  function renderField(f: FieldDef, value: string | undefined, secretsPresent: Record<string, boolean>): HTMLElement {
+  function applyReadOnly(s: ScopeState): void {
+    ($("save") as HTMLButtonElement).disabled = readOnly;
+    ($("revert") as HTMLButtonElement).disabled = readOnly;
+    let note = document.getElementById("readonly-note");
+    if (!readOnly) { note?.remove(); return; }
+    for (const el of Array.from($("form").querySelectorAll("input, select, textarea, button"))) {
+      (el as HTMLInputElement).disabled = true;
+    }
+    if (!note) {
+      note = document.createElement("p");
+      note.id = "readonly-note";
+      note.className = "warn";
+      $("form").before(note);
+    }
+    note.textContent =
+      "Editing is turned off in this version of sandy-ui. Saving from this panel could put some " +
+      "settings in the wrong file, so it's disabled until a fix ships. To change a setting now, edit " +
+      `${s.configPath || "the config file"} directly.`;
+  }
+
+  function renderField(f: FieldDef, value: string | undefined, secretsPresent: Record<string, boolean>, baseline: string): HTMLElement {
     secretsPresent = secretsPresent || {};
     const row = document.createElement("div");
     row.className = "row" + (f.privileged ? " privileged" : "");
@@ -268,7 +357,8 @@ type ToHost =
     let input: HTMLElement & { dataset: DOMStringMap };
 
     switch (f.type) {
-      case "string": {
+      case "string":
+      case "path": {   // sandy 2.x: a filesystem path, edited as text
         const i = document.createElement("input");
         i.type = "text";
         i.value = value ?? "";
@@ -290,17 +380,21 @@ type ToHost =
       case "bool": {
         const i = document.createElement("input");
         i.type = "checkbox";
-        i.checked = value === ("true" as unknown as string) || value === "1" || (value as unknown) === true;
+        i.checked = boolChecked(value);
         input = i;
         break;
       }
       case "enum": {
+        // An unset enum selects "(sandy default)" rather than whichever option
+        // happens to be listed first — that guess is how a never-touched
+        // SANDY_CROSS_SESSION_INBOUND would have been saved as "accept".
         const i = document.createElement("select");
-        for (const opt of f.options || []) {
-          const o = document.createElement("option");
-          o.value = opt; o.textContent = opt;
-          if (String(value) === opt) o.selected = true;
-          i.appendChild(o);
+        const shown = value ?? "";
+        for (const o of enumOptions(f, shown)) {
+          const opt = document.createElement("option");
+          opt.value = o.value; opt.textContent = o.label;
+          if (o.value === shown) opt.selected = true;
+          i.appendChild(opt);
         }
         input = i;
         break;
@@ -388,11 +482,31 @@ type ToHost =
         i.dataset.type = f.type;
         return row;
       }
+      default: {
+        // Compile time: every type FieldDef declares has a case above, or this
+        // assignment fails to typecheck. Run time: the schema comes from
+        // whatever sandy is installed, and a newer sandy can emit a type this
+        // build has never seen. sandy 2.x added `path`, and with no default
+        // here the first such field threw and aborted the whole form, silently
+        // hiding 46 of 62 settings. Edit unknown types as plain text instead.
+        const _exhaustive: never = f.type; void _exhaustive;
+        const unknownType = String((f as { type: unknown }).type);
+        const i = document.createElement("input");
+        i.type = "text";
+        i.value = value ?? "";
+        i.title = `Unrecognized field type "${unknownType}" — edited as plain text.`;
+        log(`settings: field ${f.key} has unrecognized type "${unknownType}"; rendering as text`);
+        input = i;
+        break;
+      }
     }
 
     input.id = `f-${f.key}`;
     input.dataset.key = f.key;
     input.dataset.type = f.type;
+    // What this control serializes to if left untouched, computed from the
+    // FILE's value (not drafts). Save sends a key only when it differs.
+    input.dataset.baseline = baseline;
     row.appendChild(input);
 
     if (f.description) {
@@ -408,18 +522,20 @@ type ToHost =
     input.classList.toggle("invalid", input.value.length > 0 && !re.test(input.value));
   }
 
-  function collect(): Record<string, string> {
-    const out: Record<string, string> = {};
+  // Every rendered row's current value, with the baseline it was rendered
+  // against (undefined for secrets, which are only ever sent when typed).
+  function collectRows(): Array<{ key: string; value: string; baseline: string | undefined }> {
+    const rows: Array<{ key: string; value: string; baseline: string | undefined }> = [];
     for (const row of Array.from($("form").children)) {
-      const groupKey = row.querySelector(".checkbox-group");
-      if (groupKey) {
+      const group = row.querySelector(".checkbox-group") as HTMLElement | null;
+      if (group) {
         const labelEl = row.querySelector("label");
-        if (!labelEl?.textContent) continue;
-        const k = labelEl.textContent.trim().split(/\s/)[0];
-        const vals = Array.from(groupKey.querySelectorAll("input:checked")).map(c => (c as HTMLInputElement).value);
+        const k = group.dataset.key ?? labelEl?.textContent?.trim().split(/\s/)[0];
+        if (!k) continue;
+        const vals = Array.from(group.querySelectorAll("input:checked")).map(c => (c as HTMLInputElement).value);
         // "" when nothing is checked → host clears the key (unchecking every
         // agent previously kept the old SANDY_AGENT — review finding B2).
-        out[k] = vals.join(",");
+        rows.push({ key: k, value: vals.join(","), baseline: group.dataset.baseline });
         continue;
       }
       const keyEl = row.querySelector("[data-key]") as (HTMLInputElement | HTMLSelectElement | null);
@@ -431,18 +547,34 @@ type ToHost =
         // paths test `!== 'false'`; the old "1"/"0" encoding matched NEITHER,
         // so unchecking SANDY_SKIP_PERMISSIONS left the bypass active (review
         // finding B1).
-        out[k] = (keyEl as HTMLInputElement).checked ? "true" : "false";
+        rows.push({ key: k, value: (keyEl as HTMLInputElement).checked ? "true" : "false", baseline: keyEl.dataset.baseline });
       } else if (t === "secret") {
         const v = (keyEl as HTMLInputElement).value;
-        if (v) out[k] = v;  // skip blank — keeps existing
+        if (v) rows.push({ key: k, value: v, baseline: undefined });  // skip blank — keeps existing
       } else {
         // Include empty values: "" tells the host to CLEAR the key. Dropping
         // empties meant the host's merge silently resurrected the old value
         // (review finding B2).
-        out[k] = keyEl.value;
+        rows.push({ key: k, value: keyEl.value, baseline: keyEl.dataset.baseline });
       }
     }
-    return out;
+    return rows;
+  }
+
+  // Every rendered value — the form's draft state and the post-save display
+  // baseline. NOT what Save sends; see collectChanged().
+  function collect(): Record<string, string> {
+    return Object.fromEntries(collectRows().map(r => [r.key, r.value]));
+  }
+
+  // What Save sends: only keys whose value differs from what the file would
+  // display. The host merges into the existing file and keeps every key it
+  // isn't sent, so skipping an untouched key is always safe — and writing every
+  // rendered key was not (see saveRules.ts for what it broke).
+  function collectChanged(): Record<string, string> {
+    return Object.fromEntries(
+      collectRows().filter(r => r.baseline === undefined || r.value !== r.baseline).map(r => [r.key, r.value]),
+    );
   }
 
   // Rows currently toggled to "will clear on save". Excludes any row where
@@ -463,7 +595,7 @@ type ToHost =
 
   function persistFormFromDom(): void {
     if (!schema) return;
-    scopes[activeScope].form = collect();
+    scopes[activeScope].form = collectChanged();   // edits only — see ingestScope
     saveState();
   }
 
@@ -488,7 +620,7 @@ type ToHost =
     };
     const sanitizeScope = (s: ScopeState): ScopeState => ({ ...s, form: stripSecrets(s.form) });
     vscode.setState<PersistedState>({
-      schema, activeScope,
+      schema, activeScope, formModel: "sparse",
       scopes: { home: sanitizeScope(scopes.home), workspace: sanitizeScope(scopes.workspace) },
     });
   }
@@ -496,13 +628,13 @@ type ToHost =
   // ---- Save / Revert -------------------------------------------------------
   $("save").addEventListener("click", () => {
     persistFormFromDom();
-    const values = collect();
     const clearSecrets = collectClearSecrets();
+    const values = collectChanged();
     pendingSave = { scope: activeScope, values, clearSecrets };
     vscode.postMessage({ type: "save", scope: activeScope, values, clearSecrets } satisfies ToHost);
   });
   $("revert").addEventListener("click", () => {
-    scopes[activeScope].form = { ...scopes[activeScope].initial };
+    scopes[activeScope].form = {};   // discard unsaved edits; display falls back to the file
     saveState();
     renderActive();
   });

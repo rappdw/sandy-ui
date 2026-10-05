@@ -20,7 +20,7 @@ VSCode extension that wraps the [sandy](https://github.com/rappdw/sandy) CLI —
 - Node 20+
 - Docker running (for sandy itself; the extension does not require it)
 - `sandy` on PATH (or `tmux` as a stand-in for testing without sandy)
-- Requires sandy ≥ 1.0.0 (config schema v1) — see [SPEC_SANDY_UI.md §Compatibility](SPEC_SANDY_UI.md#compatibility-with-sandy)
+- Requires sandy ≥ 2.6.0 (introspection schema v4); sandy 2.0–2.5 work on a best-effort basis — see [SPEC_SANDY_UI.md §Compatibility](SPEC_SANDY_UI.md#compatibility-with-sandy)
 
 ## Install (latest release)
 
@@ -68,7 +68,7 @@ npx electron-rebuild -f -w node-pty
 - `sandy.launch.closeAuxiliaryBar` — on **Sandy: Launch**, close the auxiliary side bar (where the Chat / Copilot panel typically lives) to maximize editor space (default: `true`).
 - `sandy.launch.closeSidebar` — on **Sandy: Launch**, close the primary side bar (Explorer / Search / SCM). Off by default since the file tree is usually wanted alongside sandy (default: `false`).
 - `sandy.terminal.scrollSensitivity` — mouse-wheel / trackpad scroll speed in the Sandy terminal (default `2`, range `0.1`–`10`). Higher scrolls faster, lower gives finer control. Applies live — no reload needed.
-- `sandy.persistSessions` — use sandy's daemon mode (sandy ≥ 1.1.0) so sessions survive VSCode restarts: closing a tab or quitting VSCode detaches instead of stopping; stop explicitly via the tree/status-bar Stop action (default: `true`). Off = legacy lifecycle (closing the tab stops sandy). Ignored when the installed sandy lacks daemon support — the extension itself only requires sandy ≥ 1.0. Setting `sandy.launchCommand` forces the legacy lifecycle regardless.
+- `sandy.persistSessions` — use sandy's daemon mode (sandy ≥ 1.1.0) so sessions survive VSCode restarts: closing a tab or quitting VSCode detaches instead of stopping; stop explicitly via the tree/status-bar Stop action (default: `true`). Off = legacy lifecycle (closing the tab stops sandy). Ignored when the installed sandy lacks daemon support. Setting `sandy.launchCommand` forces the legacy lifecycle regardless.
 - `sandy.longRunningSessionHours` — once per VSCode window, nudge about persisted sessions running longer than this many hours, with Attach/Stop actions (default: `24`; `0` disables).
 - `sandy.terminal.mouseMode` — `nativeSelection` (default): drag selects text natively, wheel forwards to tmux, in-app clicks aren't delivered. `tmux`: tmux owns the mouse (in-app clicks and pane interactions work); text selection needs ⌥-drag. Applies live to running terminals.
 
