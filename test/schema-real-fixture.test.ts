@@ -62,5 +62,29 @@ describe("real sandy 2.7.1 --print-schema", () => {
     expect(m, "FieldDef.type union not found").toBeTruthy();
     const webview = [...m![1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]).sort();
     expect(webview).toEqual([...FIELD_TYPES].sort());
+    // …and so does KNOWN_TYPES, which decides when to fall back to base_type.
+    const k = src.match(/const KNOWN_TYPES[^=]*= new Set\(\[([^\]]+)\]\)/);
+    expect(k, "KNOWN_TYPES not found").toBeTruthy();
+    expect([...k![1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]).sort()).toEqual([...FIELD_TYPES].sort());
+  });
+});
+
+// sandy main after #440 (f585240, 2.8.0-dev): adds base_type to every config
+// key and documents the closed set of types. The seed of the nightly contract
+// check sandy's maintainer asked consumers to own (Decision 4).
+describe("real sandy main (f585240) --print-schema", () => {
+  const main = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "sandy-2.8.0-dev-f585240-print-schema.json"), "utf8"));
+
+  it("parses, passes the gate, and every type is one sandy-ui renders", () => {
+    const s = parseSandySchema(main);
+    expect(evaluateCompat(main.sandy.version, main.schema_version)).toEqual({ kind: "ok" });
+    for (const f of s.fields) expect(FIELD_TYPES as readonly string[], f.key).toContain(f.type);
+    expect(s.capabilities).toEqual({ daemonMode: true, approvalsReport: true, updateSessions: true });
+  });
+
+  it("passes base_type through, and it agrees with how sandy-ui stores each type", () => {
+    const s = parseSandySchema(main);
+    const expected: Record<string, string> = { bool: "bool", int: "int", string: "string", path: "string", enum: "string", secret: "string", agent_combo: "string" };
+    for (const f of s.fields) expect(f.baseType, f.key).toBe(expected[f.type]);
   });
 });

@@ -27,6 +27,9 @@ export interface SandyConfigKey {
   sources?: Array<"home_config" | "home_secrets" | "workspace_config" | "env">;
   passive_approval_required?: boolean;
   stability?: string;   // "stable" | "experimental" | "deprecated"
+  // sandy >= 2.8.0 (#440): how a value of this type is stored — the fallback
+  // for rendering a `type` this build doesn't know.
+  base_type?: "string" | "bool" | "int";
 }
 
 export interface SandyConfigSection {

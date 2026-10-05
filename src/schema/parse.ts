@@ -66,6 +66,7 @@ function toFieldDef(k: SandyConfigKey, privileged: boolean | undefined, tier: Fi
   };
   if (privileged) f.privileged = true;
   if (k.stability) f.stability = k.stability;
+  if (k.base_type === "string" || k.base_type === "bool" || k.base_type === "int") f.baseType = k.base_type;
   if (k.choices)        f.options = k.choices;
   if (k.pattern != null) f.pattern = k.pattern;
   if (k.min != null)     f.min = k.min;

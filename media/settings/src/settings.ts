@@ -23,7 +23,11 @@ interface FieldDef {
   default?: unknown;
   description?: string;
   stability?: string;   // "stable" | "experimental" | "deprecated" (sandy --print-schema)
+  baseType?: "string" | "bool" | "int";   // sandy >= 2.8.0: how an unknown type is stored
 }
+
+// Every type this build renders explicitly; anything else falls back to baseType.
+const KNOWN_TYPES: ReadonlySet<string> = new Set(["string", "path", "int", "bool", "enum", "agent_combo", "secret"]);
 
 interface Schema {
   schema_version: number;
@@ -297,7 +301,11 @@ type ToHost =
         // boxes showed nothing and couldn't be edited. Comma-separated text.
         : f.type === "agent_combo" && !(f.options?.length)
           ? { ...f, type: "string" }
-          : f;
+          // A type newer than this build: render it as the base type sandy
+          // says it's stored as (bool → checkbox, int → number), not text.
+          : !KNOWN_TYPES.has(f.type) && f.baseType
+            ? { ...f, type: f.baseType }
+            : f;
       // A secret's control shows only a draft typed this session (kept in
       // memory, never persisted) — never a default, which Save would send.
       const shownRaw = eff.type === "secret" ? s.form[f.key] : displayValue(eff, s.form[f.key] ?? s.values[f.key]);

@@ -15,6 +15,7 @@ export interface FieldDef {
   default?: unknown;
   description?: string;
   stability?: string;   // passed through so the webview can hide deprecated keys
+  baseType?: "string" | "bool" | "int";   // sandy >= 2.8.0: render an unknown type as this
 }
 
 export interface Schema {
