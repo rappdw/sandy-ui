@@ -23,7 +23,7 @@ export interface Schema {
   fields:         FieldDef[];
   // Additive; the settings webview ignores it. Populated by
   // schema/parse.ts from cli_flags presence — see src/daemon/contract.ts.
-  capabilities?: { daemonMode: boolean; approvalsReport?: boolean };
+  capabilities?: { daemonMode: boolean; approvalsReport?: boolean; updateSessions?: boolean };
 }
 
 export type Scope = "home" | "workspace";

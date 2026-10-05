@@ -13,6 +13,9 @@ import { isValidSandboxName, removeSandboxArgs, cleanSandyOutput, removalPlan } 
 import { invalidateSandyPathCache, resolveSandyBinary } from "./state/sandyPath";
 import { daemonInfoFor, findLongRunners, formatAge, persistedSessionForWorkspace } from "./state/badge";
 import { pruneOrphansArgs, stopArgs, STOP_EXIT } from "./daemon/contract";
+import { updateSessionsArgs, restartStartFailed } from "./daemon/restart";
+import { runApprovals } from "./approval/approvals";
+import { buildCleanEnv } from "./terminal/pty";
 import { PtySupervisor, Session } from "./terminal/supervisor";
 import { runSynthkitCommand } from "./synthkit/commands";
 import { getCachedSchema } from "./schema/cache";
@@ -397,6 +400,21 @@ export function activate(ctx: vscode.ExtensionContext) {
       await vscode.env.clipboard.writeText(ws);
       vscode.window.setStatusBarMessage(`Copied: ${ws}`, 3000);
     }),
+    // `sandy --update-sessions` (sandy-ui#36): rebuild images, then restart
+    // the session(s) whose image changed. Offered on every running session,
+    // not just image_stale ones — image_stale only knows about images already
+    // built locally, and the build that finds a new agent release is part of
+    // this command. A no-op when nothing changed. An attached tab rides out
+    // the restart (see reconnect in webviewPanel.ts).
+    vscode.commands.registerCommand("sandy.tree.updateSession", async (node: any) => {
+      const ws: string | undefined = node?.sandbox?.workspace_path ?? undefined;
+      if (!ws) return vscode.window.showWarningMessage("Sandy: this sandbox has no workspace path — can't update it.");
+      await runUpdateSessions(ws);
+    }),
+    vscode.commands.registerCommand("sandy.updateAllSessions", async () => {
+      await runUpdateSessions(undefined);
+    }),
+
     vscode.commands.registerCommand("sandy.tree.deleteSandbox", async (node: any) => {
       const sb = node?.sandbox;
       const name: string | undefined = sb?.name;
@@ -576,6 +594,62 @@ async function launchWithWorkspaceSwitch(
 // to actually use it, same as the --validate-config precedent.
 // ---------------------------------------------------------------------------
 
+let updatesOut: vscode.OutputChannel | undefined;
+
+async function runUpdateSessions(workspace: string | undefined): Promise<void> {
+  const sandyBin = resolveSandyBinary();
+  if (!sandyBin) { vscode.window.showWarningMessage("Sandy: sandy binary not found — can't update sessions."); return; }
+  updatesOut ??= vscode.window.createOutputChannel("Sandy Updates");
+  const out = updatesOut;
+  const label = workspace ? `"${path.basename(workspace)}"` : "all sessions";
+  const args = updateSessionsArgs(workspace);
+  out.appendLine(`\n[${new Date().toISOString()}] sandy ${args.join(" ")}`);
+  out.show(true);
+  const env = buildCleanEnv();
+  let output = "";
+  const code = await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: `Sandy: updating ${label}… (output in "Sandy Updates")` },
+    () => new Promise<number>((resolve) => {
+      const child = cp.spawn(sandyBin, args, { env });
+      const write = (b: Buffer) => {
+        const text = b.toString("utf8").replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
+        output += text;
+        out.append(text);
+      };
+      child.stdout.on("data", write);
+      child.stderr.on("data", write);
+      child.on("error", (e) => { out.appendLine(`failed to run sandy: ${e.message}`); resolve(-1); });
+      child.on("close", (c) => resolve(c ?? -1));
+    }),
+  );
+  out.appendLine(`[${new Date().toISOString()}] exit ${code}`);
+  if (code === 0) {
+    vscode.window.setStatusBarMessage(`Sandy: ${label} up to date`, 5000);
+    return;
+  }
+  // The relaunch's own --start output goes to /dev/null, so an approval that
+  // blocked it (e.g. the workspace config changed since the session started)
+  // would be invisible. When that relaunch is what failed, ask --approvals.
+  // The session is left stopped in that case.
+  if (workspace && restartStartFailed(output)) {
+    const run = await runApprovals(sandyBin, workspace, env);
+    const report = run.report;
+    if (report?.complete && report.unresolved.length) {
+      vscode.window.showErrorMessage(
+        `Sandy: ${label} was updated but couldn't restart: it needs your approval for ${report.unresolved.map(gateLabel).join(" and ")}. ` +
+        `The session is stopped; launch it from the Sandy view to see what's asked and answer.`);
+      return;
+    }
+  }
+  vscode.window.showErrorMessage(`Sandy: updating ${label} failed (exit ${code}). Details are in the "Sandy Updates" output.`);
+}
+
+function gateLabel(gate: string): string {
+  return gate === "passive_privileged" ? "privileged workspace settings"
+    : gate === "dockerfile" ? "the project Dockerfile"
+    : gate === "symlinks" ? "symlinks outside the workspace" : gate;
+}
+
 async function runCompatCheck(ctx: vscode.ExtensionContext, out: vscode.OutputChannel): Promise<void> {
   // (batch-1 verify A2) getCachedSchema can't reject in practice — it always
   // resolves to a usable schema, falling back to the bundled mock on error —
@@ -584,6 +658,9 @@ async function runCompatCheck(ctx: vscode.ExtensionContext, out: vscode.OutputCh
   try {
     const res = await getCachedSchema(ctx.globalStorageUri.fsPath, schemaMock as Schema);
     const verdict = evaluateCompat(res.sandy_version, res.schema_version);
+    // Menu visibility for features detected from cli_flags.
+    void vscode.commands.executeCommand("setContext", "sandy.cap.updateSessions",
+      res.source !== "fallback" && res.schema.capabilities?.updateSessions === true);
 
     out.appendLine(
       `[${new Date().toISOString()}] compat check: sandy=${res.sandy_version ?? "(not found)"} `

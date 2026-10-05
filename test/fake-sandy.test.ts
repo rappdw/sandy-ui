@@ -125,7 +125,7 @@ describeUnix("fake-sandy: --print-version / --approvals (sandy 2.7 surface)", ()
   it("--print-schema is schema 4 and advertises --approvals", () => {
     const parsed = parseSandySchema(JSON.parse(run(["--print-schema"]).stdout));
     expect(parsed.schema_version).toBe(4);
-    expect(parsed.capabilities).toEqual({ daemonMode: true, approvalsReport: true });
+    expect(parsed.capabilities).toEqual({ daemonMode: true, approvalsReport: true, updateSessions: false });
   });
 
   it("--approvals reports everything resolved by default (exit 0), and knobs override it", () => {

@@ -90,6 +90,14 @@
         "title": "Stop sandy"
       },
       {
+        "command": "sandy.tree.updateSession",
+        "title": "Update & Restart Session"
+      },
+      {
+        "command": "sandy.updateAllSessions",
+        "title": "Sandy: Update & Restart All Sessions"
+      },
+      {
         "command": "sandy.tree.deleteSandbox",
         "title": "Delete Sandbox…"
       },
@@ -113,6 +121,10 @@
           "when": "view == sandy.projects",
           "group": "navigation"
         }
+      ],
+      "commandPalette": [
+        { "command": "sandy.tree.updateSession", "when": "false" },
+        { "command": "sandy.updateAllSessions", "when": "sandy.cap.updateSessions" }
       ],
       "view/item/context": [
         {
@@ -149,6 +161,11 @@
           "command": "sandy.tree.stop",
           "when": "view == sandy.projects && viewItem =~ /^sandbox\\.(running|locked)$/",
           "group": "5_session@2"
+        },
+        {
+          "command": "sandy.tree.updateSession",
+          "when": "view == sandy.projects && viewItem == sandbox.running && sandy.cap.updateSessions",
+          "group": "5_session@3"
         },
         {
           "command": "sandy.tree.deleteSandbox",

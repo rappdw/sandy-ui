@@ -42,6 +42,12 @@ export interface SandyRunningContainer {
   // Absent on pre-1.1.0 sandy — feature-detect, don't assume.
   daemon?: boolean;               // true = attachable sandy daemon session
   attached_clients?: number | null;  // live tmux client count; null for non-daemon
+  // sandy 1.2.0+ (sandy#44), both modes: when `sandy --update-sessions` last
+  // restarted this session; null when the user started it.
+  updated_at?: string | null;
+  // Full mode only (not `light`): a newer agent image than this container's
+  // has already been built locally.
+  image_stale?: boolean;
 }
 
 export interface SandyState {

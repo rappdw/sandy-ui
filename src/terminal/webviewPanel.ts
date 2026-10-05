@@ -14,6 +14,10 @@ import schemaMock from "../mocks/schema.json";
 import { getCachedSchema } from "../schema/cache";
 import { hasDaemonCapability, startArgs, attachArgs, startFailureMessage, classifyStartExit } from "../daemon/contract";
 import { resolveSandyBinary } from "../state/sandyPath";
+import * as cp from "child_process";
+import { parseSandyJson } from "../state/parseJson";
+import type { SandyState } from "../state/types";
+import { newRestartWatch, observeRestart, RESTART_POLL_MS, RESTART_WAIT_MS } from "../daemon/restart";
 import { Schema } from "../settings/configIO";
 
 const out = vscode.window.createOutputChannel("Sandy");
@@ -73,6 +77,37 @@ async function offerForegroundRetry(
   // so the dispose handler's detach() call is a no-op.
   try { panel.dispose(); } catch { /* already gone */ }
   await vscode.commands.executeCommand("sandy.launch", { workspacePath: ws, forceLegacy: true });
+}
+
+// Poll `sandy --print-state light` until this workspace's sandbox is running
+// again in a new container (see observeRestart), the bound runs out, or
+// `keepGoing` turns false (the tab was closed, or the user stopped it).
+async function waitForRestart(
+  ws: string, sandyBin: string, env: NodeJS.ProcessEnv,
+  keepGoing: () => boolean, log: (msg: string) => void,
+): Promise<{ updatedAt: string | null } | undefined> {
+  const readState = () => new Promise<SandyState | undefined>((resolve) => {
+    cp.execFile(sandyBin, ["--print-state", "light"], { encoding: "utf8", timeout: 15_000, maxBuffer: 10 * 1024 * 1024, env },
+      (_err, stdout) => { try { resolve(parseSandyJson<SandyState>(stdout)); } catch { resolve(undefined); } });
+  });
+  let watch = newRestartWatch();
+  const deadline = Date.now() + RESTART_WAIT_MS;
+  while (Date.now() < deadline && keepGoing()) {
+    const state = await readState();
+    if (state && state.running_containers !== null) {
+      const name = state.sandboxes?.find(s => s.workspace_path === ws)?.name;
+      const container = name ? state.running_containers?.find(c => c.sandbox === name) : undefined;
+      const r = observeRestart(watch, container);
+      watch = r.watch;
+      if (r.restarted) {
+        log(`restart detected for ${ws} (updated_at=${container?.updated_at ?? "null"})`);
+        return { updatedAt: container?.updated_at ?? null };
+      }
+    }
+    await new Promise(res => setTimeout(res, RESTART_POLL_MS));
+  }
+  log(`no restart for ${ws} within ${RESTART_WAIT_MS / 1000}s (or the wait was cancelled)`);
+  return undefined;
 }
 
 // sandy grants nothing without a yes, and a session started without one runs
@@ -346,6 +381,27 @@ export async function openTerminalPanel(
           session = supervisor.beginDaemon(ws, startPty);
           supervisor.attach(ws, panel);
           setTitleState({ kind: "starting" });
+
+          // Ride out a `sandy --update-sessions` restart (sandy-ui#36): when
+          // the attach client exits 0 and we didn't stop it, wait for the same
+          // sandbox to come back, then attach again in this tab.
+          const daemonSession = session;
+          daemonSession.reconnect = async () => {
+            const say = (text: string) => daemonSession.panel?.webview.postMessage({ type: "data", data: `\r\n\x1b[2m[${text}]\x1b[0m\r\n` });
+            setTitleState({ kind: "reconnecting" });
+            say("the sandy session ended. If sandy --update-sessions is restarting it to apply updates, this tab re-attaches when it's back (waiting up to 5 minutes). If you ended it yourself, close this tab");
+            const live = () => supervisor.getSession(ws) === daemonSession && !daemonSession.stopRequested && !daemonSession.detachRequested;
+            const back = await waitForRestart(ws, sandyBin!, env, live, log);
+            if (!back || !live()) {
+              if (live()) say("the session didn't come back — it was stopped");
+              return undefined;
+            }
+            say(back.updatedAt ? "restarted with updates — re-attaching" : "the session is back — re-attaching");
+            const next = spawnPty({ command: sandyBin!, args: attachArgs(ws), cwd: ws, env, cols: lastCols, rows: lastRows });
+            setTitleState({ kind: "attached" });
+            log(`daemon: re-attached after restart pid=${next.pid}`);
+            return next;
+          };
 
           // Policy for what --start's exit means lives HERE, not in the
           // supervisor: beginDaemon() deliberately leaves it to the

@@ -46,12 +46,14 @@ export function parseSandySchema(sandy: SandySchema): Schema {
   const daemonMode = (sandy.cli_flags ?? []).some(f => flagName(f) === "--start");
   // `sandy --approvals` (2.7.0, #296) — the launch-preview report.
   const approvalsReport = (sandy.cli_flags ?? []).some(f => flagName(f) === "--approvals");
+  // `sandy --update-sessions` (1.2.0, sandy#41) — image refresh + restart.
+  const updateSessions = (sandy.cli_flags ?? []).some(f => flagName(f) === "--update-sessions");
 
   return {
     schema_version: sandy.schema_version,
     sandy_version:  sandy.sandy?.version ?? "unknown",
     fields,
-    capabilities: { daemonMode, approvalsReport },
+    capabilities: { daemonMode, approvalsReport, updateSessions },
   };
 }
 

@@ -15,6 +15,8 @@ export type TitleState =
   | { kind: "starting" }
   | { kind: "attached" }
   | { kind: "detached" }
+  /** The session ended under us; waiting for it to restart (sandy-ui#36). */
+  | { kind: "reconnecting" }
   | { kind: "exited"; code: number }
   /** An OSC-0 title emitted by whatever is running inside the terminal. */
   | { kind: "app"; title: string };
@@ -30,6 +32,7 @@ function detailFor(state: TitleState): string {
     case "starting": return "Sandy (starting…)";
     case "attached": return "Sandy";
     case "detached": return "Sandy (detached)";
+    case "reconnecting": return "Sandy (restarting…)";
     case "exited":   return `Sandy (exit ${state.code})`;
     case "app":      return state.title;
   }

@@ -49,6 +49,16 @@ export interface Session {
   // feeds classifyDaemonAttachExit's highest-precedence branch so the intent is
   // honoured if the ordering ever changes.
   detachRequested?: boolean;
+  // Daemon only. Set by stopDaemon() before `sandy --stop`, so the attach exit
+  // that follows is known to be OUR stop and is never waited out as a restart.
+  stopRequested?: boolean;
+  // Daemon only, installed by the launch code (sandy-ui#36): when the attach
+  // client exits 0 without us stopping it, the session may just be restarting
+  // under `sandy --update-sessions`. This waits for it and returns a fresh
+  // `--attach` pty, or undefined to give up (the session really ended).
+  reconnect?: () => Promise<PtyHandle | undefined>;
+  // True while reconnect() is waiting.
+  reconnecting?: boolean;
 }
 
 export type SessionEventKind = "spawned" | "attached" | "detached" | "exited" | "client-detached";
@@ -225,13 +235,39 @@ export class PtySupervisor implements vscode.Disposable {
         this._onDidChange.fire({ kind: "client-detached", session });
         return;
       }
-      session.exited = true;
-      session.exitCode = code;
-      const p = session.panel;
-      if (p) p.webview.postMessage({ type: "exit", code });
-      this.log(`daemon session exited workspace=${session.workspacePath} code=${code} outcome=${outcome}`);
-      this.sessions.delete(session.id);
-      this._onDidChange.fire({ kind: "exited", session });
+      const finish = () => {
+        session.exited = true;
+        session.exitCode = code;
+        const p = session.panel;
+        if (p) p.webview.postMessage({ type: "exit", code });
+        this.log(`daemon session exited workspace=${session.workspacePath} code=${code} outcome=${outcome}`);
+        this.sessions.delete(session.id);
+        this._onDidChange.fire({ kind: "exited", session });
+      };
+      // The session ended under us — maybe for good, maybe restarting under
+      // `sandy --update-sessions` (sandy-ui#36). Never after our own stop.
+      if (outcome === "ended" && session.reconnect && !session.stopRequested) {
+        session.reconnecting = true;
+        this.log(`daemon session ended while attached workspace=${session.workspacePath} — waiting for a restart`);
+        void session.reconnect().then((next) => {
+          session.reconnecting = false;
+          const stillOurs = this.sessions.get(session.id) === session && !session.stopRequested && !session.detachRequested;
+          if (!stillOurs) { try { next?.kill(); } catch { /* already gone */ } return; }
+          if (next) {
+            this.log(`daemon session restarted — re-attaching workspace=${session.workspacePath}`);
+            this.promoteToAttach(session.workspacePath, next);
+            this._onDidChange.fire({ kind: "attached", session });
+          } else {
+            finish();
+          }
+        }, (e) => {
+          session.reconnecting = false;
+          this.log(`reconnect failed workspace=${session.workspacePath}: ${e?.message ?? e}`);
+          if (this.sessions.get(session.id) === session) finish();
+        });
+        return;
+      }
+      finish();
     });
 
     this.log(`promoted to attach workspace=${session.workspacePath} pid=${pty.pid}`);
@@ -351,6 +387,7 @@ export class PtySupervisor implements vscode.Disposable {
       this.log(`stopDaemon: sandy binary not found, cannot --stop workspace=${session.workspacePath}`);
       return;
     }
+    session.stopRequested = true;   // the attach exit this causes is not a restart
     this.log(`stopping daemon session workspace=${session.workspacePath} via sandy --stop`);
     await new Promise<void>((resolve) => {
       cp.execFile(sandyBin, stopArgs(session.workspacePath), { timeout: 60_000 }, (err: any) => {

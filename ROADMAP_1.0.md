@@ -121,7 +121,7 @@ Nothing here needs sandy changes.
   `--approvals` to decide *whether* a preview is needed and which gates are pending. (The
   pre-pass requires `[ -t 0 ]` — node-pty satisfies it; a `child_process` spawn would not.
   The expired-OAuth refresh is not in the pre-pass and still ends in exit 6.)
-- **`--update-sessions` cooperation** (#36 — contract stable since sandy 1.2.0): sticky
+- **`--update-sessions` cooperation** ✅ (image_stale badge deferred) (#36 — contract stable since sandy 1.2.0): sticky
   reconnect after an update restart (treat `--attach` exit 4 shortly after an `updated_at`
   change as *retry*, not *gone*, and reconcile against `--print-state`); restart-safe
   discovery; an `image_stale` surface (agent image only, full-mode only — no per-session
