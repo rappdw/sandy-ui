@@ -122,7 +122,7 @@ Docker resources (network, container, image layers) are NOT cleaned by this — 
 
 ## Schema source
 
-`src/schema/cache.ts` invokes `sandy --print-schema`, parses the JSON, and caches the result in `globalStorageUri/schema-cache.json`. The cache is keyed by `sandy --version` output — when sandy upgrades, the next `getCachedSchema` call detects the version mismatch and refetches. Cache writes are atomic (temp + rename); cache write failures are non-fatal (always returns a usable schema).
+`src/schema/cache.ts` invokes `sandy --print-schema`, parses the JSON, and caches the result in `globalStorageUri/schema-cache.json`. The cache is keyed on **which sandy build is installed** (sandy-ui#44): `sandy --print-version`'s `full_version` plus the resolved binary's mtime and size (`identityKey`) — sandy's installer and `--upgrade` install main HEAD, so many builds share one version string, and curl installs report an empty commit. `--version` is scraped only as a fallback. On a hit the cached RAW schema is re-parsed (cheap), so a parse-shape change in a new sandy-ui never serves an old `parsed` blob. Cache writes are atomic (temp + rename); cache write failures are non-fatal (always returns a usable schema).
 
 `src/schema/parse.ts` translates sandy's three-tier shape (`privileged_keys` / `passive_keys` / `env_only_keys`) into the extension's flat `fields[]` representation, renaming `name`→`key`, `choices`→`options`, `passive_approval_required`→`privileged`. `env_only_keys` are deliberately skipped (not file-configurable, no useful UI). Sandy's introspection JSON contract lives at `SPEC_INTROSPECTION.md` in the sandy repo.
 
