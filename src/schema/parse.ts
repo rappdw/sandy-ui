@@ -44,12 +44,14 @@ export function parseSandySchema(sandy: SandySchema): Schema {
   for (let i = 0; i < fields.length; i++) fields[i] = withAgents(fields[i]);
 
   const daemonMode = (sandy.cli_flags ?? []).some(f => flagName(f) === "--start");
+  // `sandy --approvals` (2.7.0, #296) — the launch-preview report.
+  const approvalsReport = (sandy.cli_flags ?? []).some(f => flagName(f) === "--approvals");
 
   return {
     schema_version: sandy.schema_version,
     sandy_version:  sandy.sandy?.version ?? "unknown",
     fields,
-    capabilities: { daemonMode },
+    capabilities: { daemonMode, approvalsReport },
   };
 }
 

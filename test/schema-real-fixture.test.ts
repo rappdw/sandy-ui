@@ -23,6 +23,7 @@ describe("real sandy 2.7.1 --print-schema", () => {
     expect(s.fields.length).toBe(62);
     expect(s.fields.every((f) => f.key && f.type)).toBe(true);
     expect(s.capabilities?.daemonMode).toBe(true);
+    expect(s.capabilities?.approvalsReport).toBe(true);
   });
 
   it("routes only secret-type keys to .secrets — none of the 16 privileged non-secrets (#53)", () => {

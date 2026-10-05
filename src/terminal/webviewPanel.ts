@@ -6,13 +6,15 @@ import { shouldUseDaemon, liveLockIsOwnStart } from "../daemon/launchMode";
 import { panelTitle, TitleState } from "./panelTitle";
 import * as fs from "fs";
 import * as path from "path";
-import { checkPreflightApproval } from "../approval/preflight";
+import { checkPreflight } from "../approval/preflight";
+import { runApprovals } from "../approval/approvals";
+import { startedWithout, refusedSymlinks } from "../approval/report";
 import { PtySupervisor, Session } from "./supervisor";
 // Daemon-mode eligibility (sandy-ui#12 batch 2): same schema-cache pattern
 // settings/webviewPanel.ts uses to source the mock fallback.
 import schemaMock from "../mocks/schema.json";
 import { getCachedSchema } from "../schema/cache";
-import { hasDaemonCapability, startArgs, attachArgs, startFailureMessage } from "../daemon/contract";
+import { hasDaemonCapability, startArgs, attachArgs, startFailureMessage, classifyStartExit } from "../daemon/contract";
 import { resolveSandyBinary } from "../state/sandyPath";
 import { Schema } from "../settings/configIO";
 
@@ -82,6 +84,45 @@ async function offerForegroundRetry(
   await vscode.commands.executeCommand("sandy.launch", { workspacePath: ws, forceLegacy: true });
 }
 
+// sandy grants nothing without a yes, and a session started without one runs
+// WITHOUT what was asked: privileged keys dropped, or the base image instead of
+// the project Dockerfile. sandy reports that only in its own log, so check after
+// the start and say so.
+async function warnIfStartedWithout(ws: string, sandyBin: string, env: NodeJS.ProcessEnv, log: (msg: string) => void): Promise<void> {
+  const run = await runApprovals(sandyBin, ws, env);
+  if (!run.report) { log(`post-start approvals check: ${run.error}`); return; }
+  const missing = startedWithout(run.report);
+  if (missing.length === 0) return;
+  log(`post-start approvals check: session running without ${missing.join("; ")}`);
+  vscode.window.showWarningMessage(
+    `Sandy: "${path.basename(ws)}" started without ${missing.join(" and ")}, because they weren't approved. ` +
+    `Stop the session and launch again to be asked.`,
+  );
+}
+
+// A refused --start (exit 6) has several causes; only one, the symlink gate,
+// shows up in `sandy --approvals`, and no prompt can answer it — so don't offer
+// a foreground retry for it. Everything else keeps the retry offer.
+async function explainStartFailure(
+  ws: string, code: number, panel: vscode.WebviewPanel,
+  sandyBin: string | undefined, env: NodeJS.ProcessEnv, log: (msg: string) => void,
+): Promise<void> {
+  if (classifyStartExit(code) === "refused" && sandyBin) {
+    const run = await runApprovals(sandyBin, ws, env);
+    const links = refusedSymlinks(run.report);
+    if (links.length) {
+      log(`--start refused: symlinks outside the workspace not approved: ${links.join("; ")}`);
+      vscode.window.showErrorMessage(
+        `Sandy refused to start "${path.basename(ws)}": ${links.length === 1 ? "a symlink points" : `${links.length} symlinks point`} ` +
+        `outside the workspace and ${links.length === 1 ? "isn't" : "aren't"} approved (${links.join(", ")}). ` +
+        `The terminal shows sandy's message with how to approve or remove ${links.length === 1 ? "it" : "them"}.`,
+      );
+      return;
+    }
+  }
+  await offerForegroundRetry(ws, code, panel, log);
+}
+
 export async function openTerminalPanel(
   ctx: vscode.ExtensionContext,
   supervisor: PtySupervisor,
@@ -122,21 +163,21 @@ export async function openTerminalPanel(
 
   const isReattach = existingSession !== undefined;
 
-  let approveEnv: Record<string, string> = {};
+  // `sandy --approvals` (2.7.0+) drives the launch preview, the post-start
+  // "running without" warning, and the exit-6 explanation.
+  const approvalsCapable = (await getCachedSchema(ctx.globalStorageUri.fsPath, schemaMock as Schema))
+    .schema?.capabilities?.approvalsReport === true;
   if (!isReattach) {
-    // Pre-flight approval check. Runs `sandy --validate-config` and shows
-    // the approval modal if the workspace config has privileged keys
-    // requiring explicit approval. Errors from validate are non-fatal —
-    // we proceed and let sandy itself enforce approval at launch time.
-    const preflight = await checkPreflightApproval(ctx, ws);
-    if (preflight.error) log(`preflight: ${preflight.error} (proceeding; sandy will enforce)`);
-    if (preflight.validation?.approval_status) log(`preflight: approval_status=${preflight.validation.approval_status}`);
+    // Read-only launch preview (decision C). sandy asks for approval itself, in
+    // the terminal; sandy-ui no longer sets SANDY_AUTO_APPROVE_PRIVILEGED.
+    // Never blocks a launch on its own failure — sandy enforces every gate.
+    const preflight = await checkPreflight(ctx, ws, resolveSandyBinary(), approvalsCapable, buildCleanEnv());
+    if (preflight.note) log(`preflight: ${preflight.note}`);
+    if (preflight.report?.complete) log(`preflight: unresolved gates = [${preflight.report.unresolved.join(", ")}]`);
     if (!preflight.proceed) {
-      log("preflight: user rejected — launch cancelled");
+      log("preflight: launch cancelled from the preview");
       return;
     }
-    approveEnv = preflight.setApproveEnv ? { SANDY_AUTO_APPROVE_PRIVILEGED: "1" } : {};
-    if (preflight.setApproveEnv) log("preflight: SANDY_AUTO_APPROVE_PRIVILEGED=1 set for THIS launch only");
   } else {
     log(`re-attaching to existing session for workspace=${ws}`);
   }
@@ -313,7 +354,7 @@ export async function openTerminalPanel(
             log(`lock sweep failed (continuing): ${e?.message ?? e}`);
           }
 
-          const env = buildCleanEnv(approveEnv);
+          const env = buildCleanEnv();
           log(`PATH: ${env.PATH}`);
           lastCols = m.cols || 80;
           lastRows = m.rows || 24;
@@ -357,6 +398,7 @@ export async function openTerminalPanel(
                 supervisor.promoteToAttach(ws, attachPty);
                 setTitleState({ kind: "attached" });
                 log(`daemon: attached pid=${attachPty.pid}`);
+                if (approvalsCapable) void warnIfStartedWithout(ws, sandyBin!, env, log);
               } catch (e: any) {
                 log(`daemon: --attach spawn failed: ${e?.message ?? e}`);
                 supervisor.abortDaemonStart(ws, -1);
@@ -366,7 +408,7 @@ export async function openTerminalPanel(
               log(`daemon: --start failed exit=${code}`);
               recentStartFailures.set(ws, { code, at: Date.now() });
               supervisor.abortDaemonStart(ws, code);
-              void offerForegroundRetry(ws, code, panel, log);
+              void explainStartFailure(ws, code, panel, approvalsCapable ? sandyBin : undefined, env, log);
             }
           });
           break;
@@ -436,7 +478,7 @@ export async function openTerminalPanel(
           await forceStopOrphans(aliveLocks, log);
         }
 
-        const env = buildCleanEnv(approveEnv);
+        const env = buildCleanEnv();
         log(`PATH: ${env.PATH}`);
 
         // Allow explicit override via workspace setting.

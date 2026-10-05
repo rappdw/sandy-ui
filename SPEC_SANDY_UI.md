@@ -74,18 +74,17 @@ Each launched project opens a **webview tab in the editor area** (not VSCode's b
 
 The webview-side JS is TypeScript (compiled with the same `tsc` invocation as the extension code) — silent runtime errors in vanilla webview JS were a recurring source of confusion in the spike, and TS catches them at compile time.
 
-### 3. Pre-flight approval modal (webview)
+### 3. Launch preview (webview, read-only)
 
-Before any `sandy` subprocess starts, the extension runs `sandy --validate-config ${WORKSPACE}/.sandy/config` and surfaces the result as a **webview-based modal** (not `showInformationMessage`) when there's something the user needs to see:
+Before a new session starts, the extension runs `sandy --approvals --workspace ${WORKSPACE}` (sandy ≥ 2.7.0; feature-detected from `cli_flags`) with the environment the launch will use, and if any of sandy's three launch gates is unresolved, shows a **read-only preview** in a webview tab:
 
-- **Privileged keys set from passive source** (`approval_status: "pending"`) → modal shows the raw `KEY=VALUE` set inside a `<pre>` block with `white-space: pre`, rendered via `textContent` (not `innerHTML`) — guaranteed verbatim. Includes a diff vs. the last-approved set (if any), and Approve / Reject buttons.
-- **World-open LAN allowlists** (`SANDY_ALLOW_LAN_HOSTS=0.0.0.0/0` etc.) → modal refuses the launch and points to the remediation.
-- **Unknown keys** → inline warning in the settings panel, not a modal (low-severity).
-- **Sandbox compat warning** (`created_version` predates `SANDY_SANDBOX_MIN_COMPAT`) → modal with "Rebuild sandbox" or "Launch anyway".
+- **Privileged workspace settings** not yet approved, or changed since approval → each key **with its value** from `.sandy/config` / `.sandy/.secrets` (values from `.secrets`, or named like a credential, are masked). sandy's own prompt shows names only, so this is the one place a user can see, say, where `SANDY_ALLOW_HOSTS` points.
+- **The project `.sandy/Dockerfile`** not yet approved, or changed → its path and build-context files, and a note when a sandy session (not the user) created the `.sandy/` directory.
+- **Symlinks escaping the workspace** that aren't approved → the launch will be refused whatever anyone answers; the preview says so and lists them.
 
-Webview modal over `vscode.window.showInformationMessage({modal:true})` because the spike validated that webview gives full control over rendering verbatim text (`<script>`, `&`, `"`, leading whitespace all preserved without HTML encoding) — the native modal's `detail` field works for plain content but is undocumented around special characters and whitespace, and that's exactly the case where this approval modal is the security gate. Predictable trumps simpler.
+Buttons: **Continue — answer in the terminal** / **Cancel**. **The extension approves nothing.** sandy asks in the terminal (its `--start` pre-pass prompts on our pty for every gate) and records the answer itself. Earlier versions approved in the webview and launched with `SANDY_AUTO_APPROVE_PRIVILEGED=1`, which sandy reserves for CI: it approves whatever sandy reads at spawn time, not necessarily what the user saw. Content is rendered with `textContent` in a `<pre>`, so hostile values display verbatim. No `--approvals` (sandy 2.6), no binary, or no report → the launch proceeds and sandy asks on its own.
 
-The extension never fakes an approval. When the user clicks "Approve", `sandy` is invoked with `SANDY_AUTO_APPROVE_PRIVILEGED=1` in the subprocess environment for **that single launch** — the environment does not leak. Sandy's CLI writes the persistent approval record the same way it does today; the extension reads it via `--print-state` on the next launch to decide whether to show the dialog again.
+After a daemon session starts, the extension checks `--approvals` again: a declined key or Dockerfile is dropped silently by sandy (`--start` still exits 0), so the extension warns that the session is running without them. A refused start (exit 6) caused by the symlink gate gets a message naming the symlinks and no foreground-retry offer, since no prompt can answer it.
 
 ### 4. Settings editor (webview, scope tabs)
 
@@ -237,9 +236,9 @@ Only used for read-only operations: `ps --filter label=sandy`, `stats`, `inspect
 1. User invokes **Sandy: Launch** (command palette, projects-tree click, or status-bar quick-pick).
 2. If no workspace folder is open, prompt for one with VSCode's folder picker — never fall back to `$HOME` silently (a tool that scans its workspace can blast-radius the entire user account on macOS).
 3. Pre-launch lock sweep: scan `~/.sandy/sandboxes/.<basename>-*.lock` for this workspace, remove any with dead PIDs.
-4. Run `sandy --validate-config $WORKSPACE/.sandy/config` (short timeout, non-blocking on its own).
-5. If `--validate-config` returns `approval_status: "pending"`, open the pre-flight modal in a webview tab. User approves or rejects.
-6. On approve, create a webview-as-editor-tab in `ViewColumn.Active`, instantiate xterm.js, wait for the webview's first `fit.fit()` to send fitted dimensions, then `node-pty` spawn `sandy` against the workspace at those dimensions. Subprocess env is the whitelist plus `SANDY_AUTO_APPROVE_PRIVILEGED=1` if the user just approved via UI; the env does not leak to the next launch.
+4. Run `sandy --approvals --workspace $WORKSPACE` (sandy ≥ 2.7.0; non-blocking on its own failure).
+5. If a gate is unresolved, open the read-only launch preview (§3). User continues or cancels.
+6. Create a webview-as-editor-tab in `ViewColumn.Active`, instantiate xterm.js, wait for the webview's first `fit.fit()` to send fitted dimensions, then `node-pty` spawn `sandy` against the workspace at those dimensions. Subprocess env is the whitelist; sandy prompts for any unresolved gate in the terminal.
 7. Terminal renders, user sees sandy's startup output.
 8. On exit, tab stays open showing the final screen; **Relaunch** action appears in the tree-item context menu.
 
@@ -411,8 +410,8 @@ Unit tests (Jest / Vitest, no VSCode needed):
 Integration tests (`@vscode/test-electron`, runs in a real VSCode):
 6. **Webview xterm.js end-to-end**: spawn a subprocess that emits ANSI + OSC 9 + OSC 52; assert xterm.js renders, OSC events round-trip to host, clipboard receives OSC 52 payload.
 7. **PTY supervisor**: stop command escalates SIGINT → wait → SIGTERM → wait → SIGKILL with correct timing; exit-code capture is accurate; stale lock file cleaned before next launch.
-8. **Pre-flight modal renders raw `KEY=VALUE` lines verbatim** (assert no HTML entity encoding, no whitespace collapse, no truncation).
-9. **Approval flow end-to-end**: mock `sandy --validate-config` returning pending approval → modal shown → approve → subprocess launched with `SANDY_AUTO_APPROVE_PRIVILEGED=1` → env does not leak to next launch.
+8. **Launch preview renders raw `KEY=VALUE` lines verbatim** (assert no HTML entity encoding, no whitespace collapse, no truncation).
+9. **Launch preview end-to-end**: fake `sandy --approvals` reporting an unresolved gate → preview shown → continue → subprocess launched WITHOUT `SANDY_AUTO_APPROVE_PRIVILEGED`.
 10. **Settings webview round-trip**: load config → edit → save → reload → edited value present, in both Project and Global scopes; tab switch preserves in-progress edits per scope.
 11. **Compatibility refuses unknown schema**: mock `--print-schema` returning `schema_version: 99` → extension shows upgrade prompt, blocks launch.
 12. **Docker-unreachable fallback**: mock Docker socket as absent → multi-session dashboard shows "Docker unreachable" state, no crash; project launch still works (sandy itself does the Docker call).

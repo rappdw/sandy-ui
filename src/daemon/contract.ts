@@ -138,9 +138,11 @@ export function startFailureMessage(code: number | undefined | null): string {
   const shown = code ?? "unknown";
   switch (classifyStartExit(code)) {
     case "refused":
-      return `Sandy: a startup approval was not granted (exit ${shown}), so the daemon session wasn't started. ` +
-             `The terminal shows sandy's reason and the exact fix. Retrying in the foreground runs sandy directly, ` +
-             `which lets you answer the prompt if it's an answerable one.`;
+      // Exit 6 has several causes (an expired login, a pre-2.0 sandbox, a
+      // retired config key, the Linux firewall check, …), not just approvals,
+      // so this doesn't guess; the refused-symlink case gets its own message.
+      return `Sandy refused to start this workspace (exit ${shown}). The terminal shows sandy's reason and the fix. ` +
+             `Retrying in the foreground runs sandy directly in this tab, which helps if it was waiting on a question.`;
     case "crash-loop":
       return `Sandy: the daemon container is crash-looping (exit ${shown}) — sandy is tearing the failed session down. ` +
              `The container log tail is in the terminal.`;

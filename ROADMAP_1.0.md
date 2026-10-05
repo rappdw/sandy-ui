@@ -90,7 +90,7 @@ Nothing here needs sandy changes.
   `full_version` alone. Drops the regex scrape.
 - **`--workspace`** (#43): with a 2.6.0 floor it is always present in `cli_flags` — close
   #43 as resolved by the floor rather than building a version-aware gate.
-- **Make exit 6 legible** (sandy: "today that 6 is the most confusing thing a stranger will
+- **Make exit 6 legible** ✅ (sandy: "today that 6 is the most confusing thing a stranger will
   hit"). Exit 6 means *refused before launch, fixable in one step*, and it has seven causes,
   only one of which is an approval: a declined or new escaping symlink; a pre-2.0 sandbox
   (`sandy --reset-sandbox --workspace P --keep-history`); an expired Claude OAuth token
@@ -100,13 +100,13 @@ Nothing here needs sandy changes.
   refused"*, so the message points at the streamed log tail first, and additionally runs
   `sandy --approvals --workspace <path>` (read-only JSON; exit 0 resolved / 2 something
   withheld or refused / 1 no report) to name the gate when it *is* one.
-- **Warn about the silent case — arguably the more valuable change.** Two of the three
+- **Warn about the silent case — arguably the more valuable change.** ✅ Two of the three
   approval gates never produce exit 6: declined privileged keys are **dropped** and a
   declined `.sandy/Dockerfile` falls back to the standard image, and `--start` returns **0**
   either way. A stranger gets a quietly tighter session with no explanation. After a
   successful start, run `--approvals` and, if it reports something withheld, say which keys
   were dropped or that the project image was skipped.
-- **The pre-flight approval path** (decision C — hybrid). Our pre-flight modal sets
+- **The pre-flight approval path** (decision C — hybrid) ✅. Our pre-flight modal sets
   `SANDY_AUTO_APPROVE_PRIVILEGED=1` for the launch after the user approves in *our* webview;
   sandy's guidance is to never set it on the user's behalf (it's the CI escape hatch, and it
   approves whatever config sandy reads at spawn time, not necessarily what the user saw). The

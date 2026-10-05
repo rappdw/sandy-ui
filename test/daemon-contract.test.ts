@@ -198,7 +198,9 @@ describe("startFailureMessage", () => {
     // there sends the user to a button that reproduces the same failure.
     const m = startFailureMessage(6).toLowerCase();
     expect(m).not.toContain("will ask again");
-    expect(m).toContain("approval was not granted");
+    // …and doesn't claim an approval was the cause: exit 6 has several.
+    expect(m).not.toContain("approval");
+    expect(m).toContain("refused");
     expect(m).toContain("terminal");   // point at sandy's own reason + fix
   });
 

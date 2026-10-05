@@ -10,7 +10,7 @@
 
 export {}; // mark as module so local types don't leak into global scope
 
-type FromHost = { type: "render"; header: string; subtext: string; body: string };
+type FromHost = { type: "render"; header: string; subtext: string; body: string; primary?: string; secondary?: string };
 type ToHost   = { type: "ready" } | { type: "decision"; value: "approve" | "reject" };
 
 (() => {
@@ -32,6 +32,8 @@ type ToHost   = { type: "ready" } | { type: "decision"; value: "approve" | "reje
     $("header").textContent  = m.header;
     $("subtext").textContent = m.subtext;
     $("body").textContent    = m.body;
+    if (m.primary)   $("approve").textContent = m.primary;
+    if (m.secondary) $("reject").textContent  = m.secondary;
   });
 
   $("approve").addEventListener("click", () => post({ type: "decision", value: "approve" }));

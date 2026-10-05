@@ -16,6 +16,9 @@ export interface ApprovalPayload {
   header:  string;
   subtext: string;
   body:    string;
+  /** Button labels. The primary resolves "approve", the secondary "reject". */
+  primary?:   string;
+  secondary?: string;
 }
 
 export async function openApprovalWebview(
@@ -24,7 +27,7 @@ export async function openApprovalWebview(
 ): Promise<"approve" | "reject" | undefined> {
   const panel = vscode.window.createWebviewPanel(
     "sandy.approval",
-    "Sandy: approval required",
+    "Sandy: launch preview",
     vscode.ViewColumn.Active,
     {
       enableScripts: true,
@@ -50,7 +53,10 @@ export async function openApprovalWebview(
       if (m.type === "ready") {
         // Send raw payload AS DATA (not HTML) so the webview can render it
         // via textContent — no encoding risk for KEY=VALUE content.
-        panel.webview.postMessage({ type: "render", header: payload.header, subtext: payload.subtext, body: payload.body });
+        panel.webview.postMessage({
+          type: "render", header: payload.header, subtext: payload.subtext, body: payload.body,
+          primary: payload.primary ?? "Approve", secondary: payload.secondary ?? "Reject",
+        });
       } else if (m.type === "decision") {
         if (!resolved) { resolved = true; resolve(m.value); }
         panel.dispose();
