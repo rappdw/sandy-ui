@@ -11,7 +11,6 @@ VSCode extension that wraps the [sandy](https://github.com/rappdw/sandy) CLI —
 - **Schema-driven settings webview** with Project (default) and Global scope tabs. Editing `<workspace>/.sandy/config` and `~/.sandy/config` with live `pattern` / `min` / `max` validation, scope-aware secret storage.
 - **Pre-flight approval modal** for passive-privileged keys, rendering raw `KEY=VALUE` content verbatim (no HTML interpretation, no whitespace collapse).
 - **OSC handling**: OSC 9 / 99 / 777 → VSCode notifications, OSC 52 → host clipboard via `vscode.env.clipboard`.
-- **Stale-lock sweep on launch**: cleans `~/.sandy/sandboxes/*.lock` files whose PIDs are dead.
 - **Proper signal escalation on tab close**: SIGINT → 3s → SIGTERM → 2s → SIGKILL so sandy's cleanup trap has time to run.
 
 ## Prereqs

@@ -73,7 +73,7 @@ Nothing here needs sandy changes.
   reads files with sandy's own parsing, writes keep comments, order and permissions, secret
   values never reach the webview, and edits made during a save survive the ack. The state
   transitions live in `saveRules.ts` as pure, tested functions.
-- **Delete the last private-layout dependency** (#158). Our `sandyState.ts` globs
+- **Delete the last private-layout dependency** (#158) ✅ (lock sweep, orphan modal, Remove Lock; Delete Sandbox next). Our `sandyState.ts` globs
   `~/.sandy/sandboxes/.<base>-<8hex>.lock` to *remove* stale locks. sandy now does this
   itself — every launch (including `--start`) clears a provably-stale lock for its own
   workspace, and `--stop` reaps a dead session's. ("Provably stale" means the holder pid is

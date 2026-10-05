@@ -1,10 +1,8 @@
 import * as vscode from "vscode";
 import { launchCandidates, buildCleanEnv, spawnPty } from "./pty";
 import { OscEvent } from "./oscHandler";
-import { sweepStaleLocks, readLockPid, isPidAlive } from "./sandyState";
-import { shouldUseDaemon, liveLockIsOwnStart } from "../daemon/launchMode";
+import { shouldUseDaemon } from "../daemon/launchMode";
 import { panelTitle, TitleState } from "./panelTitle";
-import * as fs from "fs";
 import * as path from "path";
 import { checkPreflight } from "../approval/preflight";
 import { runApprovals } from "../approval/approvals";
@@ -60,13 +58,6 @@ type FromHost =
 // Deliberately a ONE-LAUNCH bypass, not a settings flip: turning off
 // sandy.persistSessions to get past a single launch would silently cost the
 // user session persistence from then on.
-// Workspaces whose `sandy --start` failed in THIS window, and when. A timed-out
-// --start (exit 8) that never created a container skips sandy's teardown, so
-// its forked background process keeps running and keeps the workspace lock —
-// often still building the image. The foreground retry then finds a live lock
-// that is ours, not an orphan from another session (sandy-ui#50).
-const recentStartFailures = new Map<string, { code: number; at: number }>();
-
 async function offerForegroundRetry(
   ws: string,
   code: number,
@@ -337,23 +328,10 @@ export async function openTerminalPanel(
         // either way from the user's perspective.
 
         if (useDaemon) {
-          // Daemon fresh-spawn path (sandy-ui#12 batch 2). Stale-lock
-          // sweep still runs (dead-PID cleanup is still wanted), but the
-          // orphan-lock modal is a legacy-only concept: under daemon mode
-          // a live lock is the EXPECTED state (the daemon holds it across
-          // VSCode sessions), and a genuine bare-CLI conflict makes
-          // `--start` itself fail with an informative error that streams
-          // live into the visible terminal — no need to pre-empt it with
-          // a modal. We just log live locks instead of prompting.
-          try {
-            const sweep = sweepStaleLocks(ws);
-            if (sweep.cleaned.length) log(`cleaned ${sweep.cleaned.length} stale lock(s): ${sweep.cleaned.join(", ")}`);
-            if (sweep.alive.length)   log(`live lock(s) detected (daemon mode — expected, no prompt): ${sweep.alive.join(", ")}`);
-            if (sweep.unknown.length) log(`unparseable lock(s) left alone: ${sweep.unknown.join(", ")}`);
-          } catch (e: any) {
-            log(`lock sweep failed (continuing): ${e?.message ?? e}`);
-          }
-
+          // Daemon fresh-spawn path (sandy-ui#12 batch 2). No lock handling
+          // here: sandy clears a provably stale lock for its own workspace on
+          // every launch (rappdw/sandy#158), and a genuine conflict makes
+          // `--start` fail with sandy's own message, streamed into this tab.
           const env = buildCleanEnv();
           log(`PATH: ${env.PATH}`);
           lastCols = m.cols || 80;
@@ -387,7 +365,6 @@ export async function openTerminalPanel(
                 log(`daemon: --start exited 0 but local client was closed during start — skipping attach spawn (host session, if created, persists)`);
                 return;
               }
-              recentStartFailures.delete(ws);
               log("daemon: --start exited 0, promoting to sandy --attach");
               try {
                 const attachPty = spawnPty({
@@ -406,7 +383,6 @@ export async function openTerminalPanel(
               }
             } else {
               log(`daemon: --start failed exit=${code}`);
-              recentStartFailures.set(ws, { code, at: Date.now() });
               supervisor.abortDaemonStart(ws, code);
               void explainStartFailure(ws, code, panel, approvalsCapable ? sandyBin : undefined, env, log);
             }
@@ -414,70 +390,11 @@ export async function openTerminalPanel(
           break;
         }
 
-        // Fresh spawn path. Stale-lock sweep first — VSCode reload / crash
-        // interrupts sandy's cleanup trap and leaves locks behind that
-        // block re-launch.
-        let aliveLocks: string[] = [];
-        try {
-          const sweep = sweepStaleLocks(ws);
-          if (sweep.cleaned.length) log(`cleaned ${sweep.cleaned.length} stale lock(s): ${sweep.cleaned.join(", ")}`);
-          if (sweep.alive.length)   log(`live lock(s) detected: ${sweep.alive.join(", ")}`);
-          if (sweep.unknown.length) log(`unparseable lock(s) left alone: ${sweep.unknown.join(", ")}`);
-          aliveLocks = sweep.alive;
-        } catch (e: any) {
-          log(`lock sweep failed (continuing): ${e?.message ?? e}`);
-        }
-
-        // Live lock, no session in our supervisor. Two very different cases:
-        //  - a foreground retry right after this window's own --start failed:
-        //    the lock is that --start's background process, most likely still
-        //    building the image (sandy-ui#50);
-        //  - otherwise sandy is running outside this window — a terminal
-        //    `sandy`, another VSCode window, or a session whose cleanup a
-        //    VSCode quit cut short (this path is legacy-only; daemon sessions
-        //    re-attach instead).
-        if (aliveLocks.length > 0) {
-          const pids = aliveLocks
-            .map(p => readLockPid(p)).filter((n): n is number => n != null);
-          const pidLabel = pids.length ? `pid ${pids.join(", ")}` : "unknown pid";
-          const failed = recentStartFailures.get(ws);
-          const ours = liveLockIsOwnStart(!!opts.forceLegacy, failed, Date.now());
-          const STOP = "Stop existing & launch fresh";
-          const choice = ours
-            ? await vscode.window.showWarningMessage(
-              `Sandy is still starting in the background for "${path.basename(ws)}".`,
-              {
-                modal: true,
-                detail:
-                  `The sandy launch that ${failed!.code === 8 ? "timed out" : "failed"} a moment ago left its background process running (${pidLabel}). ` +
-                  `It is most likely still building the image. A foreground sandy can't start while it holds the workspace lock.\n\n` +
-                  `"Cancel" lets it finish: launch again from the Sandy view in a few minutes and sandy-ui will attach to it.\n\n` +
-                  `"Stop existing & launch fresh" stops it (interrupting any image build) and runs sandy in this tab, where it can prompt you.`,
-              },
-              STOP,
-            )
-            : await vscode.window.showWarningMessage(
-              `Sandy is already running for "${path.basename(ws)}" outside this window.`,
-              {
-                modal: true,
-                detail:
-                  `A live lock exists (${pidLabel}). Sandy may be running in a terminal or another VSCode window, ` +
-                  `or a VSCode quit may have cut its cleanup short.\n\n` +
-                  `"Stop existing & launch fresh" sends it SIGTERM (its cleanup stops the container and removes the network), ` +
-                  `removes the lock, and starts a new session here.\n\n` +
-                  `"Cancel" leaves it running.`,
-              },
-              STOP,
-            );
-          if (choice !== STOP) {
-            log("user cancelled orphan resolution — aborting spawn");
-            panel.dispose();
-            return;
-          }
-          log(`force-stopping orphans: ${pids.join(", ")}`);
-          await forceStopOrphans(aliveLocks, log);
-        }
-
+        // Fresh spawn path. No lock sweep or orphan modal any more: they read
+        // sandy's private ~/.sandy/sandboxes layout, which sandy's path
+        // contract (2.7, #386) says may change in any release. sandy clears a
+        // provably stale lock itself (#158); a lock held by a live sandy makes
+        // this launch print sandy's own message in the terminal.
         const env = buildCleanEnv();
         log(`PATH: ${env.PATH}`);
 
@@ -660,34 +577,6 @@ function forceTmuxRepaint(pty: Session["pty"], cols: number, rows: number): void
       try { pty.resize(cols, rows); } catch { /* PTY may have exited */ }
     }, 60);
   }, 80);
-}
-
-async function forceStopOrphans(aliveLockPaths: string[], log: (m: string) => void): Promise<void> {
-  for (const lockPath of aliveLockPaths) {
-    const pid = readLockPid(lockPath);
-    if (pid == null) continue;
-    if (!isPidAlive(pid)) { log(`orphan pid ${pid} already gone, skipping signal`); continue; }
-    try {
-      process.kill(pid, "SIGTERM");
-      log(`SIGTERM sent to orphan pid ${pid}`);
-    } catch (e: any) {
-      log(`SIGTERM to pid ${pid} failed: ${e?.message ?? e}`);
-    }
-  }
-
-  // Give sandy's cleanup trap a chance to run (docker stop is slow). 3s is
-  // a balance between cleanup completion and user-perceived launch latency.
-  await new Promise(r => setTimeout(r, 3_000));
-
-  for (const lockPath of aliveLockPaths) {
-    if (!fs.existsSync(lockPath)) { log(`orphan lock cleaned by sandy's trap: ${lockPath}`); continue; }
-    try {
-      fs.rmSync(lockPath, { recursive: true, force: true });
-      log(`force-removed orphan lock: ${lockPath}`);
-    } catch (e: any) {
-      log(`failed to remove orphan lock ${lockPath}: ${e?.message ?? e}`);
-    }
-  }
 }
 
 async function maximizeEditorSpaceIfRequested(): Promise<void> {

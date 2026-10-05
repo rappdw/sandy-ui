@@ -90,10 +90,6 @@
         "title": "Stop sandy"
       },
       {
-        "command": "sandy.tree.removeLock",
-        "title": "Remove Lock…"
-      },
-      {
         "command": "sandy.tree.deleteSandbox",
         "title": "Delete Sandbox…"
       },
@@ -153,11 +149,6 @@
           "command": "sandy.tree.stop",
           "when": "view == sandy.projects && viewItem =~ /^sandbox\\.(running|locked)$/",
           "group": "5_session@2"
-        },
-        {
-          "command": "sandy.tree.removeLock",
-          "when": "view == sandy.projects && viewItem == sandbox.locked",
-          "group": "8_unstick@1"
         },
         {
           "command": "sandy.tree.deleteSandbox",

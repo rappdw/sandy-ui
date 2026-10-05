@@ -35,16 +35,14 @@ export function deriveBadge(
   }
 
   // locked: lock file held but no running container. Stale lock or pre-launch
-  // setup window. The host's stale-lock sweep will clean dead-PID locks at
-  // launch time, but for display we just show the locked state.
+  // setup window. sandy clears a provably stale lock itself on the next launch
+  // of that workspace (rappdw/sandy#158); for display we just show the state.
   //
   // Deliberately does NOT branch on lock_holder_alive: the badge describes the
   // LOCK FILE, which is held either way, and demoting a dead-holder lock out of
   // "locked" would change contextValue (`sandbox.<badge>`) and therefore menu
-  // visibility — including hiding "Remove Lock" from the very case it exists
-  // for. Holder liveness is surfaced as TEXT instead (projectsTree's describe/
-  // tooltip and the Remove Lock modal), which is where it's useful and where it
-  // can't silently rewire the UI.
+  // visibility (Detach/Stop key off sandbox.locked). Holder liveness is
+  // surfaced as TEXT instead (projectsTree's description and tooltip).
   if (sandbox.lock_held === true) return "locked";
 
   // stale: hasn't been touched in a long time.

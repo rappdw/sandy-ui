@@ -9,7 +9,7 @@ import { openSettingsPanel } from "./settings/webviewPanel";
 import { ProjectsTreeProvider } from "./projectsTree";
 import { StatePoller } from "./state/poller";
 import { pollCadence } from "./state/cadence";
-import { deleteSandboxDir, removeLockForSandbox, lockPathForSandbox } from "./state/deleteSandbox";
+import { deleteSandboxDir } from "./state/deleteSandbox";
 import { invalidateSandyPathCache, resolveSandyBinary } from "./state/sandyPath";
 import { daemonInfoFor, findLongRunners, formatAge, persistedSessionForWorkspace } from "./state/badge";
 import { pruneOrphansArgs, stopArgs, STOP_EXIT } from "./daemon/contract";
@@ -396,60 +396,6 @@ export function activate(ctx: vscode.ExtensionContext) {
       if (!ws) return vscode.window.showWarningMessage("No workspace_path on this sandbox.");
       await vscode.env.clipboard.writeText(ws);
       vscode.window.setStatusBarMessage(`Copied: ${ws}`, 3000);
-    }),
-    vscode.commands.registerCommand("sandy.tree.removeLock", async (node: any) => {
-      const sb = node?.sandbox;
-      if (!sb?.name) return vscode.window.showWarningMessage("Sandy: no sandbox name on this entry — nothing to unlock.");
-
-      // Refuse if a container is actively running for this sandbox — the lock
-      // is real, removing it would let a second sandy spawn against the same
-      // container/network and corrupt state.
-      const cur = poller.current();
-      const isRunning = !!cur.state?.running_containers?.some(c => c.sandbox === sb.name);
-      if (isRunning) {
-        vscode.window.showErrorMessage(
-          `Sandy: sandbox "${sb.name}" has a running container — the lock is real, not stale. Stop sandy in this workspace first.`
-        );
-        return;
-      }
-
-      const lockPath = lockPathForSandbox(sb.name);
-      const holderPid = sb.lock_holder_pid;
-      // lock_holder_alive (sandy 1.1.0+, feature-detected) lets us state
-      // liveness definitively instead of guessing. undefined/null (older
-      // sandy, or no PID recorded) keeps today's hedged wording.
-      const holderAlive: boolean | null | undefined = sb.lock_holder_alive;
-      let pidClause: string;
-      if (holderPid == null) {
-        pidClause = `No PID is recorded in the lock — likely a leftover from a crashed sandy.\n\n`;
-      } else if (holderAlive === true) {
-        pidClause = `The lock is held by PID ${holderPid}, confirmed still running. Removing this lock is dangerous — it would let a second sandy spawn against the same container/network.\n\n`;
-      } else if (holderAlive === false) {
-        pidClause = `The lock claims to be held by PID ${holderPid}, but that process is confirmed NOT running. This is a safe stale-lock removal.\n\n`;
-      } else {
-        pidClause = `The lock claims to be held by PID ${holderPid}. If that process is actually alive and using sandy, removing this lock is dangerous.\n\n`;
-      }
-      const choice = await vscode.window.showWarningMessage(
-        `Remove lock for "${sb.name}"?`,
-        {
-          modal: true,
-          detail:
-            `This deletes the lock file:\n  ${lockPath}\n\n` +
-            pidClause +
-            `Sandbox files and any approval records are NOT touched. The next sandy launch will re-acquire the lock cleanly.`,
-        },
-        "Remove Lock"
-      );
-      if (choice !== "Remove Lock") return;
-
-      const result = removeLockForSandbox(sb.name);
-      if (result.ok) {
-        vscode.window.setStatusBarMessage(`Removed lock for: ${sb.name}`, 5000);
-        stateOut.appendLine(`[${new Date().toISOString()}] removed lock: ${result.removedPath}`);
-        void poller.refresh();
-      } else {
-        vscode.window.showErrorMessage(`Sandy: remove lock failed — ${result.error}`);
-      }
     }),
     vscode.commands.registerCommand("sandy.tree.deleteSandbox", async (node: any) => {
       const sb = node?.sandbox;

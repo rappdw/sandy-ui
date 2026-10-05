@@ -31,22 +31,3 @@ export function shouldUseDaemon(i: LaunchModeInputs): boolean {
   if (!i.hasSandyBinary) return false;
   return true;
 }
-
-/** How long after a failed `--start` a live lock is still presumed to be its. */
-export const OWN_START_WINDOW_MS = 30 * 60 * 1000;
-
-/**
- * Whether a live workspace lock found by a foreground retry belongs to the
- * `--start` that just failed in this window (sandy-ui#50), rather than to a
- * sandy running elsewhere. A timed-out --start that never created a container
- * skips sandy's teardown, so its background process keeps the lock. Only a
- * forceLegacy retry qualifies: an ordinary launch finding a live lock gets the
- * "running outside this window" prompt.
- */
-export function liveLockIsOwnStart(
-  forceLegacy: boolean,
-  lastFailure: { code: number; at: number } | undefined,
-  now: number,
-): boolean {
-  return forceLegacy && !!lastFailure && now - lastFailure.at >= 0 && now - lastFailure.at < OWN_START_WINDOW_MS;
-}
