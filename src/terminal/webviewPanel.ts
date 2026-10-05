@@ -2,9 +2,10 @@ import * as vscode from "vscode";
 import { launchCandidates, buildCleanEnv, spawnPty } from "./pty";
 import { OscEvent } from "./oscHandler";
 import { sweepStaleLocks, readLockPid, isPidAlive } from "./sandyState";
-import { shouldUseDaemon } from "../daemon/launchMode";
+import { shouldUseDaemon, liveLockIsOwnStart } from "../daemon/launchMode";
 import { panelTitle, TitleState } from "./panelTitle";
 import * as fs from "fs";
+import * as path from "path";
 import { checkPreflightApproval } from "../approval/preflight";
 import { PtySupervisor, Session } from "./supervisor";
 // Daemon-mode eligibility (sandy-ui#12 batch 2): same schema-cache pattern
@@ -57,6 +58,13 @@ type FromHost =
 // Deliberately a ONE-LAUNCH bypass, not a settings flip: turning off
 // sandy.persistSessions to get past a single launch would silently cost the
 // user session persistence from then on.
+// Workspaces whose `sandy --start` failed in THIS window, and when. A timed-out
+// --start (exit 8) that never created a container skips sandy's teardown, so
+// its forked background process keeps running and keeps the workspace lock —
+// often still building the image. The foreground retry then finds a live lock
+// that is ours, not an orphan from another session (sandy-ui#50).
+const recentStartFailures = new Map<string, { code: number; at: number }>();
+
 async function offerForegroundRetry(
   ws: string,
   code: number,
@@ -338,6 +346,7 @@ export async function openTerminalPanel(
                 log(`daemon: --start exited 0 but local client was closed during start — skipping attach spawn (host session, if created, persists)`);
                 return;
               }
+              recentStartFailures.delete(ws);
               log("daemon: --start exited 0, promoting to sandy --attach");
               try {
                 const attachPty = spawnPty({
@@ -355,6 +364,7 @@ export async function openTerminalPanel(
               }
             } else {
               log(`daemon: --start failed exit=${code}`);
+              recentStartFailures.set(ws, { code, at: Date.now() });
               supervisor.abortDaemonStart(ws, code);
               void offerForegroundRetry(ws, code, panel, log);
             }
@@ -376,31 +386,48 @@ export async function openTerminalPanel(
           log(`lock sweep failed (continuing): ${e?.message ?? e}`);
         }
 
-        // Orphan-from-prior-VSCode-session handling. If sandy is genuinely
-        // running (live PID lock) but the supervisor has no session for
-        // this workspace, we lost track of it across a VSCode restart /
-        // crash / quit. Without sandy daemon-mode (rappdw/sandy#17), we
-        // can't transparently re-attach. Offer the user the choice:
-        // stop & restart fresh, or cancel.
+        // Live lock, no session in our supervisor. Two very different cases:
+        //  - a foreground retry right after this window's own --start failed:
+        //    the lock is that --start's background process, most likely still
+        //    building the image (sandy-ui#50);
+        //  - otherwise sandy is running outside this window — a terminal
+        //    `sandy`, another VSCode window, or a session whose cleanup a
+        //    VSCode quit cut short (this path is legacy-only; daemon sessions
+        //    re-attach instead).
         if (aliveLocks.length > 0) {
           const pids = aliveLocks
             .map(p => readLockPid(p)).filter((n): n is number => n != null);
-          const pidLabel = pids.length ? `pid ${pids.join(", ")}` : "(unknown pid)";
-          const choice = await vscode.window.showWarningMessage(
-            `Sandy is already running for "${ws}" from outside this VSCode session.`,
-            {
-              modal: true,
-              detail:
-                `A live lock exists (${pidLabel}). This usually means a previous VSCode quit interrupted sandy's cleanup trap, ` +
-                `or sandy was started outside sandy-ui. Sandy-ui can't transparently re-attach across VSCode restarts (yet — ` +
-                `daemon-mode is tracked at github.com/rappdw/sandy/issues/17).\n\n` +
-                `"Stop existing & launch fresh" SIGTERMs the running sandy (its cleanup trap will run docker stop / network rm), ` +
-                `removes the lock, and starts a new session here.\n\n` +
-                `"Cancel" leaves everything as-is — you can attach via terminal: \`sandy --workspace ${ws}\`.`,
-            },
-            "Stop existing & launch fresh",
-          );
-          if (choice !== "Stop existing & launch fresh") {
+          const pidLabel = pids.length ? `pid ${pids.join(", ")}` : "unknown pid";
+          const failed = recentStartFailures.get(ws);
+          const ours = liveLockIsOwnStart(!!opts.forceLegacy, failed, Date.now());
+          const STOP = "Stop existing & launch fresh";
+          const choice = ours
+            ? await vscode.window.showWarningMessage(
+              `Sandy is still starting in the background for "${path.basename(ws)}".`,
+              {
+                modal: true,
+                detail:
+                  `The sandy launch that ${failed!.code === 8 ? "timed out" : "failed"} a moment ago left its background process running (${pidLabel}). ` +
+                  `It is most likely still building the image. A foreground sandy can't start while it holds the workspace lock.\n\n` +
+                  `"Cancel" lets it finish: launch again from the Sandy view in a few minutes and sandy-ui will attach to it.\n\n` +
+                  `"Stop existing & launch fresh" stops it (interrupting any image build) and runs sandy in this tab, where it can prompt you.`,
+              },
+              STOP,
+            )
+            : await vscode.window.showWarningMessage(
+              `Sandy is already running for "${path.basename(ws)}" outside this window.`,
+              {
+                modal: true,
+                detail:
+                  `A live lock exists (${pidLabel}). Sandy may be running in a terminal or another VSCode window, ` +
+                  `or a VSCode quit may have cut its cleanup short.\n\n` +
+                  `"Stop existing & launch fresh" sends it SIGTERM (its cleanup stops the container and removes the network), ` +
+                  `removes the lock, and starts a new session here.\n\n` +
+                  `"Cancel" leaves it running.`,
+              },
+              STOP,
+            );
+          if (choice !== STOP) {
             log("user cancelled orphan resolution — aborting spawn");
             panel.dispose();
             return;
