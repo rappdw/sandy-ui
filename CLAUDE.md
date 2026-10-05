@@ -34,7 +34,7 @@ When `package.json` `version` is bumped and `npm run release` is run:
 
 ## Tests
 
-- **Unit tests** live under `test/*.test.ts`, run via Vitest (`npm test`). Pure-logic modules only — `oscHandler`, `configIO`, `schema/parse`, `state/badge`, `state/deleteSandbox`, `state/sandyPath`, `approval/report`. Each FS-touching module also exports a path-parameterized variant (e.g., `deleteSandboxDir(path, sandboxesRoot)` with a root that defaults to `~/.sandy/sandboxes`) so tests don't touch the user's real `~/.sandy/`.
+- **Unit tests** live under `test/*.test.ts`, run via Vitest (`npm test`). Pure-logic modules only — `oscHandler`, `configIO`, `schema/parse`, `state/badge`, `state/removeSandbox`, `state/sandyPath`, `approval/report`. Each FS-touching module also exports a path-parameterized variant (e.g., `configIO`'s scope functions take the workspace path, and tests pass a tmp dir) so tests don't touch the user's real `~/.sandy/`.
 - **Integration tests** live under `test/integration/*.test.ts`, run via `@vscode/test-electron` (`npm run test:integration`). They download a real VSCode, install the extension, and run Mocha-suite assertions inside the extension host context — so they can hit `vscode.extensions.getExtension(...)`, `vscode.commands.executeCommand(...)`, `vscode.window.tabGroups`, etc. Use these for things vitest can't reach: extension activation, command registration, webview panels opening as a side effect of commands.
 - Integration tests compile via `tsconfig.integration.json` to `out-integration/*.test.js`; vscode-test config is `.vscode-test.mjs`. Vitest excludes `test/integration/**` so the two suites don't collide.
 - `test/integration/daemon.test.ts` covers the full daemon lifecycle (two-phase launch, tab-close detach, relaunch reattach, explicit stop, `sandy.launchCommand`/`persistSessions` legacy fallbacks) against `test/fixtures/fake-sandy` — no Docker or real sandy binary needed; the fixture's own contract is pinned by `test/fake-sandy.test.ts` (runs everywhere, including sandboxed containers with no display).
@@ -109,15 +109,9 @@ The marker is *always* cleared on activate (even when not fired) so a cancelled 
 
 ## Sandbox deletion
 
-`src/state/deleteSandbox.ts` (`deleteSandboxDir`) provides safe filesystem removal of a sandbox dir. **Three safety layers** because `rm -rf` on a wild path is catastrophic:
+`sandy.tree.deleteSandbox` runs **`sandy --remove-sandbox --sandbox <name>`** (sandy #178; helpers in `src/state/removeSandbox.ts`). It used to `rm -rf` the directory under `~/.sandy/sandboxes/` itself — sandy's private layout (path contract, 2.7 #386), and it left behind what sandy keeps beside the directory (sibling `.claude.json`, feature records, the lock). Flow: refuse up front if `--print-state` shows the sandbox running (sandy refuses too); run `--dry-run` and show sandy's own plan (`removalPlan`, colour codes and its "nothing removed" footer stripped) in a modal confirmation; on "Delete", run with `--yes`. Both runs are logged in full to the "Sandy State" output channel. The name is checked against sandy's own `--sandbox` rule (`isValidSandboxName`) before anything runs.
 
-1. Path is `path.resolve()`d and the relative result against `sandboxesRoot` (default `~/.sandy/sandboxes/`) must not be empty, start with `..`, or be absolute. This rejects `/`, the root itself, parent-traversal escapes, and anything outside the sandbox tree.
-2. Existence check before rm.
-3. Wrapped in try/catch; never throws.
-
-Caller (`sandy.tree.deleteSandbox` in extension.ts) is responsible for the **modal confirmation** (`showWarningMessage` with `modal: true`) and for **refusing-to-delete-running-sandboxes** (consults `poller.current().state.running_containers`). The delete function itself doesn't know about the running state — it just removes the dir.
-
-Docker resources (network, container, image layers) are NOT cleaned by this — sandy's own teardown (or a `docker system prune`) handles those.
+Docker resources (network, container, image layers) are NOT cleaned by this — sandy's own teardown, `sandy --prune-orphans`, or `docker system prune` handle those.
 
 ## Schema source
 

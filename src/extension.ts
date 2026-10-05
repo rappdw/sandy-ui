@@ -9,7 +9,7 @@ import { openSettingsPanel } from "./settings/webviewPanel";
 import { ProjectsTreeProvider } from "./projectsTree";
 import { StatePoller } from "./state/poller";
 import { pollCadence } from "./state/cadence";
-import { deleteSandboxDir } from "./state/deleteSandbox";
+import { isValidSandboxName, removeSandboxArgs, cleanSandyOutput, removalPlan } from "./state/removeSandbox";
 import { invalidateSandyPathCache, resolveSandyBinary } from "./state/sandyPath";
 import { daemonInfoFor, findLongRunners, formatAge, persistedSessionForWorkspace } from "./state/badge";
 import { pruneOrphansArgs, stopArgs, STOP_EXIT } from "./daemon/contract";
@@ -399,45 +399,57 @@ export function activate(ctx: vscode.ExtensionContext) {
     }),
     vscode.commands.registerCommand("sandy.tree.deleteSandbox", async (node: any) => {
       const sb = node?.sandbox;
-      if (!sb?.path) return vscode.window.showWarningMessage("Sandy: no sandbox path on this entry — nothing to delete.");
+      const name: string | undefined = sb?.name;
+      if (!name || !isValidSandboxName(name)) {
+        return vscode.window.showWarningMessage("Sandy: this entry has no usable sandbox name — nothing to delete.");
+      }
+      const sandyBin = resolveSandyBinary();
+      if (!sandyBin) return vscode.window.showWarningMessage("Sandy: sandy binary not found — can't delete the sandbox.");
 
-      // Refuse to delete a running sandbox — the container would orphan and
-      // the next launch would fail. Force the user to stop it first.
+      // sandy refuses too, but saying so up front beats a failed dry run.
       const cur = poller.current();
-      const isRunning = !!cur.state?.running_containers?.some(c => c.sandbox === sb.name);
-      if (isRunning) {
-        vscode.window.showErrorMessage(
-          `Sandy: sandbox "${sb.name}" is currently running. Stop sandy in this workspace first, then try Delete again.`
-        );
+      if (cur.state?.running_containers?.some(c => c.sandbox === name)) {
+        vscode.window.showErrorMessage(`Sandy: sandbox "${name}" is running. Stop it first, then try Delete again.`);
         return;
       }
 
-      // Modal confirmation. detail field carries the full path so the user
-      // sees exactly what's about to be removed; "Delete" is the only action
-      // — Cancel is the default (Esc / click outside).
+      const run = (dryRun: boolean) => new Promise<{ code: number; output: string }>((resolve) => {
+        cp.execFile(sandyBin, removeSandboxArgs(name, dryRun), { timeout: 60_000, maxBuffer: 4 * 1024 * 1024 },
+          (err: any, stdout: string, stderr: string) => resolve({
+            code: err ? (typeof err.code === "number" ? err.code : 1) : 0,
+            output: `${stdout ?? ""}${stderr ?? ""}`,
+          }));
+      });
+      const stamp = () => `[${new Date().toISOString()}]`;
+
+      // sandy's own plan of what it will remove, shown in the confirmation.
+      const plan = await run(true);
+      stateOut.appendLine(`${stamp()} sandy --remove-sandbox --sandbox ${name} --dry-run (exit ${plan.code})\n${plan.output}`);
+      if (plan.code !== 0) {
+        vscode.window.showErrorMessage(`Sandy: can't delete "${name}": ${cleanSandyOutput(plan.output, 4) || `exit ${plan.code}`}`);
+        return;
+      }
       const choice = await vscode.window.showWarningMessage(
-        `Delete sandbox "${sb.name}"?`,
+        `Delete sandbox "${name}"?`,
         {
           modal: true,
           detail:
-            `This permanently removes the sandbox directory:\n` +
-            `  ${sb.path}\n\n` +
-            `Workspace folder is NOT touched: ${sb.workspace_path ?? "(unknown)"}\n\n` +
-            `If sandy left Docker resources behind (network, image), they are NOT cleaned by this action — run \`docker system prune\` separately if needed.\n\n` +
+            `${removalPlan(plan.output)}\n\n` +
+            `The workspace folder is not touched: ${sb.workspace_path ?? "(unknown)"}\n` +
             `This cannot be undone.`,
         },
-        "Delete"
+        "Delete",
       );
       if (choice !== "Delete") return;
 
-      const result = deleteSandboxDir(sb.path);
-      if (result.ok) {
-        vscode.window.setStatusBarMessage(`Deleted sandbox: ${sb.name}`, 5000);
-        stateOut.appendLine(`[${new Date().toISOString()}] deleted sandbox: ${result.removedPath}`);
-        void poller.refresh();
+      const result = await run(false);
+      stateOut.appendLine(`${stamp()} sandy --remove-sandbox --sandbox ${name} --yes (exit ${result.code})\n${result.output}`);
+      if (result.code === 0) {
+        vscode.window.setStatusBarMessage(`Deleted sandbox: ${name}`, 5000);
       } else {
-        vscode.window.showErrorMessage(`Sandy: delete failed — ${result.error}`);
+        vscode.window.showErrorMessage(`Sandy: delete failed — ${cleanSandyOutput(result.output, 4) || `exit ${result.code}`}`);
       }
+      void poller.refresh();
     }),
 
     // Synthkit md2{email,doc,pdf} for .md files. Argument is a Uri when
