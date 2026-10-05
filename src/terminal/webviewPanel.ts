@@ -85,7 +85,7 @@ async function offerForegroundRetry(
 async function waitForRestart(
   ws: string, sandyBin: string, env: NodeJS.ProcessEnv,
   keepGoing: () => boolean, log: (msg: string) => void,
-): Promise<{ updatedAt: string | null } | undefined> {
+): Promise<{ updatedAt: string | null } | "user-ended" | undefined> {
   const readState = () => new Promise<SandyState | undefined>((resolve) => {
     cp.execFile(sandyBin, ["--print-state", "light"], { encoding: "utf8", timeout: 15_000, maxBuffer: 10 * 1024 * 1024, env },
       (_err, stdout) => { try { resolve(parseSandyJson<SandyState>(stdout)); } catch { resolve(undefined); } });
@@ -97,9 +97,13 @@ async function waitForRestart(
     if (state && state.running_containers !== null) {
       const name = state.sandboxes?.find(s => s.workspace_path === ws)?.name;
       const container = name ? state.running_containers?.find(c => c.sandbox === name) : undefined;
-      const r = observeRestart(watch, container);
+      const r = observeRestart(watch, container, Date.now());
       watch = r.watch;
-      if (r.restarted) {
+      if (r.verdict === "user-ended") {
+        log(`session for ${ws} ended inside a still-running container — the user ended it; not waiting for a restart`);
+        return "user-ended";
+      }
+      if (r.verdict === "restarted") {
         log(`restart detected for ${ws} (updated_at=${container?.updated_at ?? "null"})`);
         return { updatedAt: container?.updated_at ?? null };
       }
@@ -389,9 +393,13 @@ export async function openTerminalPanel(
           daemonSession.reconnect = async () => {
             const say = (text: string) => daemonSession.panel?.webview.postMessage({ type: "data", data: `\r\n\x1b[2m[${text}]\x1b[0m\r\n` });
             setTitleState({ kind: "reconnecting" });
-            say("the sandy session ended. If sandy --update-sessions is restarting it to apply updates, this tab re-attaches when it's back (waiting up to 5 minutes). If you ended it yourself, close this tab");
+            say("the sandy session ended — checking whether sandy is restarting it to apply updates (if so, this tab re-attaches when it's back)");
             const live = () => supervisor.getSession(ws) === daemonSession && !daemonSession.stopRequested && !daemonSession.detachRequested;
             const back = await waitForRestart(ws, sandyBin!, env, live, log);
+            if (back === "user-ended") {
+              say("the session was ended from inside; nothing is restarting it");
+              return undefined;
+            }
             if (!back || !live()) {
               if (live()) say("the session didn't come back — it was stopped");
               return undefined;
