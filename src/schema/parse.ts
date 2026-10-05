@@ -24,6 +24,13 @@ export function parseSandySchema(sandy: SandySchema): Schema {
   const fields: FieldDef[] = [];
   const cfg = sandy.config ?? {};
 
+  // An agent_combo key (SANDY_AGENT) carries no `choices`; the agent list is
+  // the schema's top-level `agents` array (sandy-ui#52). Without it the form
+  // rendered a checkbox group with no boxes.
+  const agentNames = (sandy.agents ?? []).map(a => a?.name).filter((n): n is string => typeof n === "string" && n !== "");
+  const withAgents = (f: FieldDef): FieldDef =>
+    f.type === "agent_combo" && !f.options?.length && agentNames.length ? { ...f, options: agentNames } : f;
+
   for (const k of cfg.privileged_keys ?? []) {
     // privileged_keys always need approval when set from workspace; mark
     // privileged: true so the UI shows the yellow border + warning.
@@ -34,6 +41,7 @@ export function parseSandySchema(sandy: SandySchema): Schema {
     fields.push(toFieldDef(k, /* privilegedOverride */ k.passive_approval_required, defaultTierFor(k, "home")));
   }
   // env_only_keys: deliberately skipped — not file-configurable.
+  for (let i = 0; i < fields.length; i++) fields[i] = withAgents(fields[i]);
 
   const daemonMode = (sandy.cli_flags ?? []).some(f => flagName(f) === "--start");
 

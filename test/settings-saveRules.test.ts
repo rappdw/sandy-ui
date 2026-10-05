@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
-import { boolChecked, boolEncoding, boolUnrecognized, displayValue, serialize, baselineValue, enumOptions } from "../media/settings/src/saveRules";
+import { agentBoxes, agentComboValue, boolChecked, boolEncoding, boolUnrecognized, displayValue, serialize, baselineValue, enumOptions } from "../media/settings/src/saveRules";
 import { parseSandySchema } from "../src/schema/parse";
 
 // The settings form sends a key only when its value differs from its baseline:
@@ -79,10 +79,10 @@ describe("serialize / displayValue", () => {
     expect(serialize({ key: "N", type: "int" }, 128000)).toBe("128000");
   });
 
-  it("agent_combo serializes in option order and drops unknowns, matching collect()", () => {
+  it("agent_combo keeps sandy's order (first = primary) and values that aren't listed agents", () => {
     const f = { key: "SANDY_AGENT", type: "agent_combo", options: ["claude", "codex", "gemini"] };
-    expect(serialize(f, "gemini,claude,bogus")).toBe("claude,gemini");
-    expect(baselineValue(f, "gemini,claude")).toBe("claude,gemini");
+    expect(serialize(f, "gemini, claude,all,gemini")).toBe("gemini,claude,all");
+    expect(baselineValue(f, "gemini,claude")).toBe("gemini,claude");
   });
 });
 
@@ -210,6 +210,38 @@ describe("bool spelling per key", () => {
       const ok = d === "0" || d === "1" || d === "true" || d === "false" || known.has(f.key);
       expect(ok, `${f.key} default=${String(d)}`).toBe(true);
       expect(["1", "true"]).toContain(boolEncoding(f).on);
+    }
+  });
+});
+
+
+// sandy-ui#52: SANDY_AGENT's list comes from the schema's top-level `agents`,
+// and sandy reads its order (first agent = primary, pane layout).
+describe("SANDY_AGENT", () => {
+  it("gets the five agents from sandy 2.7.1's top-level agents list", () => {
+    expect(field("SANDY_AGENT").options).toEqual(["claude", "gemini", "codex", "opencode", "grok"]);
+  });
+
+  it("draws a box for a stored value that isn't a listed agent, so it can be seen and unchecked", () => {
+    expect(agentBoxes(["claude", "codex"], "codex,all")).toEqual([
+      { value: "claude", listed: true }, { value: "codex", listed: true }, { value: "all", listed: false },
+    ]);
+  });
+
+  it("keeps the stored order, and appends newly checked agents", () => {
+    // Boxes are in option order; the stored order wins for boxes still checked.
+    expect(agentComboValue("codex,claude", ["claude", "codex"])).toBe("codex,claude");
+    expect(agentComboValue("codex,claude", ["claude", "codex", "gemini"])).toBe("codex,claude,gemini");
+    expect(agentComboValue("codex,claude", ["claude"])).toBe("claude");
+    expect(agentComboValue("", ["gemini", "claude"])).toBe("gemini,claude");
+    expect(agentComboValue("claude,all", ["claude"])).toBe("claude");
+  });
+
+  it("an untouched group matches its baseline, so it is never sent", () => {
+    for (const stored of ["codex,claude", "claude", " codex , claude ", "all"]) {
+      const f = field("SANDY_AGENT");
+      const checked = agentBoxes(f.options ?? [], stored).map((b) => b.value).filter((v) => stored.includes(v));
+      expect(agentComboValue(stored, checked), stored).toBe(baselineValue(f, stored));
     }
   });
 });

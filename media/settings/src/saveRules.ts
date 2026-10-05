@@ -77,15 +77,37 @@ export function serialize(f: RuleField, shown: unknown): string {
   switch (f.type) {
     case "bool":
       return boolChecked(f, shown) ? boolEncoding(f).on : boolEncoding(f).off;
-    case "agent_combo": {
-      const selected = new Set(String(shown ?? "").split(",").filter(Boolean));
-      return (f.options ?? []).filter((o) => selected.has(o)).join(",");
-    }
+    case "agent_combo":
+      return agentTokens(shown).join(",");
     case "secret":
       return ""; // secrets are sent only when typed; see collect()
     default:
       return shown == null ? "" : String(shown);
   }
+}
+
+// SANDY_AGENT's ORDER matters to sandy: the first agent is the primary one
+// and the order lays out the panes. So the stored order is kept, values sandy
+// accepts that aren't listed agents (`all`) are kept as their own boxes, and a
+// newly checked agent is appended.
+
+/** A stored agent list as sandy splits it: comma-separated, trimmed, no repeats. */
+export function agentTokens(v: unknown): string[] {
+  return [...new Set(String(v ?? "").split(",").map((t) => t.trim()).filter(Boolean))];
+}
+
+/** The boxes to draw: every listed agent, then any stored value that isn't one. */
+export function agentBoxes(options: string[], stored: unknown): Array<{ value: string; listed: boolean }> {
+  const boxes = options.map((o) => ({ value: o, listed: true }));
+  for (const t of agentTokens(stored)) if (!options.includes(t)) boxes.push({ value: t, listed: false });
+  return boxes;
+}
+
+/** What a checkbox group writes: the stored order for boxes still checked, then new ones in box order. */
+export function agentComboValue(stored: unknown, checkedInBoxOrder: string[]): string {
+  const checked = new Set(checkedInBoxOrder);
+  const kept = agentTokens(stored).filter((t) => checked.has(t));
+  return [...kept, ...checkedInBoxOrder.filter((t) => !kept.includes(t))].join(",");
 }
 
 /** What an untouched control would serialize to, given only the FILE's value. */

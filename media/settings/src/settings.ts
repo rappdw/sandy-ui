@@ -7,7 +7,7 @@
 
 export {}; // mark as module so local types don't leak into global scope
 
-import { boolChecked, boolEncoding, boolUnrecognized, displayValue, baselineValue, enumOptions, pickChanged, applySavedAck, ingestHostScope, type FormRow } from "./saveRules";
+import { agentBoxes, agentComboValue, agentTokens, boolChecked, boolEncoding, boolUnrecognized, displayValue, baselineValue, enumOptions, pickChanged, applySavedAck, ingestHostScope, type FormRow } from "./saveRules";
 
 type Scope = "home" | "workspace";
 
@@ -416,17 +416,25 @@ type ToHost =
       case "agent_combo": {
         const i = document.createElement("div");
         i.className = "checkbox-group";
-        const selected = new Set((value || "").split(",").filter(Boolean));
-        for (const opt of f.options || []) {
+        // The stored order is sandy's (first = primary agent); collectRows
+        // writes it back through agentComboValue.
+        const selected = new Set(agentTokens(value));
+        i.dataset.stored = value ?? "";
+        for (const box of agentBoxes(f.options || [], value)) {
           const wrap = document.createElement("label");
           wrap.className = "inline";
           const cb = document.createElement("input");
           cb.type = "checkbox";
-          cb.value = opt;
-          cb.checked = selected.has(opt);
+          cb.value = box.value;
+          cb.checked = selected.has(box.value);
           wrap.appendChild(cb);
-          wrap.appendChild(document.createTextNode(" " + opt));
+          wrap.appendChild(document.createTextNode(" " + box.value + (box.listed ? "" : " (not a listed agent)")));
           i.appendChild(wrap);
+        }
+        if (agentTokens(value).length > 1) {
+          note = document.createElement("p");
+          note.className = "desc";
+          note.textContent = `Order: ${agentTokens(value).join(", ")} — the first is the primary agent. Newly checked agents are added at the end.`;
         }
         input = i;
         break;
@@ -553,7 +561,7 @@ type ToHost =
         const vals = Array.from(group.querySelectorAll("input:checked")).map(c => (c as HTMLInputElement).value);
         // "" when nothing is checked → host clears the key (unchecking every
         // agent previously kept the old SANDY_AGENT — review finding B2).
-        rows.push({ key: k, value: vals.join(","), baseline: group.dataset.baseline });
+        rows.push({ key: k, value: agentComboValue(group.dataset.stored ?? "", vals), baseline: group.dataset.baseline });
         continue;
       }
       const keyEl = row.querySelector("[data-key]") as (HTMLInputElement | HTMLSelectElement | null);
