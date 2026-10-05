@@ -24,6 +24,9 @@
     "onStartupFinished"
   ],
   "contributes": {
+    "configurationDefaults": {
+      "window.title": "${rootName}${separator}${activeEditorShort}${dirty}"
+    },
     "commands": [
       {
         "command": "sandy.launch",
