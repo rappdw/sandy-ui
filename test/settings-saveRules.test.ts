@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
-import { boolChecked, displayValue, serialize, baselineValue, enumOptions } from "../media/settings/src/saveRules";
+import { boolChecked, boolEncoding, boolUnrecognized, displayValue, serialize, baselineValue, enumOptions } from "../media/settings/src/saveRules";
 import { parseSandySchema } from "../src/schema/parse";
 
 // The settings form sends a key only when its value differs from its baseline:
@@ -23,13 +23,15 @@ describe("baselineValue on real sandy 2.7.1 fields", () => {
     expect(baselineValue(field("SANDY_EFFORT"), undefined)).toBe("");
   });
 
-  it("an unset bool with no default has baseline false", () => {
-    expect(baselineValue(field("SANDY_RELAY"), undefined)).toBe("false");
+  it("an unset bool's baseline is its default, in the key's own spelling", () => {
+    expect(baselineValue(field("SANDY_OFFLINE"), undefined)).toBe("0");
+    expect(baselineValue(field("SANDY_SKIP_PERMISSIONS"), undefined)).toBe("true");
+    expect(baselineValue(field("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"), undefined)).toBe("0");
   });
 
   it("a stored value is its own baseline, so an untouched stored key is not re-sent", () => {
     expect(baselineValue(field("SANDY_EFFORT"), "high")).toBe("high");
-    expect(baselineValue(field("SANDY_RELAY"), "true")).toBe("true");
+    expect(baselineValue(field("SANDY_OFFLINE"), "1")).toBe("1");
   });
 });
 
@@ -59,9 +61,16 @@ describe("enumOptions", () => {
 });
 
 describe("serialize / displayValue", () => {
-  it("bool accepts every stored truthy form", () => {
-    for (const v of ["true", "1", true]) expect(boolChecked(v)).toBe(true);
-    for (const v of ["false", "0", "", undefined, null, false]) expect(boolChecked(v)).toBe(false);
+  it("a bool is checked only by its own key's 'on' spelling", () => {
+    const digits = field("SANDY_ALLOW_NO_ISOLATION"), words = field("SANDY_SKIP_PERMISSIONS");
+    expect(boolChecked(digits, "1")).toBe(true);
+    // sandy tests `= 1`: "true" here is OFF, and the form must not claim otherwise.
+    for (const v of ["true", "0", "", undefined, null, false]) expect(boolChecked(digits, v)).toBe(false);
+    expect(boolChecked(words, "true")).toBe(true);
+    for (const v of ["1", "false", ""]) expect(boolChecked(words, v)).toBe(false);
+    expect(boolUnrecognized(digits, "true")).toBe(true);
+    expect(boolUnrecognized(digits, "0")).toBe(false);
+    expect(boolUnrecognized(digits, undefined)).toBe(false);
   });
 
   it("enums ignore the schema default; other types pre-fill it", () => {
@@ -74,5 +83,133 @@ describe("serialize / displayValue", () => {
     const f = { key: "SANDY_AGENT", type: "agent_combo", options: ["claude", "codex", "gemini"] };
     expect(serialize(f, "gemini,claude,bogus")).toBe("claude,gemini");
     expect(baselineValue(f, "gemini,claude")).toBe("claude,gemini");
+  });
+});
+
+// ---- State sequences (#53) --------------------------------------------------
+// The webview is a browser IIFE with no DOM test environment, so these drive
+// the same pure transitions it uses: render rows from state, pick what Save
+// sends, apply the host's ack.
+import { pickChanged, applySavedAck, ingestHostScope, type FormScope, type FormRow } from "../media/settings/src/saveRules";
+
+const isSecret = (k: string) => byKey.get(k)?.type === "secret";
+const empty = (): FormScope => ({ values: {}, form: {}, secretsPresent: {}, clearPending: [], misplaced: [] });
+/** Rows as rendered from state, with the user's control values overriding. */
+function rows(s: FormScope, controls: Record<string, string>): FormRow[] {
+  return Object.keys({ ...controls, ...s.form }).map((k) => {
+    const f = field(k);
+    const shown = k in controls ? controls[k] : s.form[k];
+    return { key: k, value: shown, baseline: f.type === "secret" ? undefined : baselineValue(f, s.values[k]) };
+  });
+}
+const host = (values: Record<string, string>, secretsPresent: Record<string, boolean> = {}) => ({ values, secretsPresent });
+
+describe("save state sequences", () => {
+  it("toggle off → save → ack → toggle back on → save sends the key (stale-baseline bug)", () => {
+    // SANDY_SKIP_PERMISSIONS defaults to true, so an unset file shows it on.
+    let s = empty();
+    const sent1 = pickChanged(rows(s, { SANDY_SKIP_PERMISSIONS: "false" }));
+    expect(sent1).toEqual({ SANDY_SKIP_PERMISSIONS: "false" });
+    s.form = sent1;
+    s = applySavedAck(s, { values: sent1, clearSecrets: [] }, host({ SANDY_SKIP_PERMISSIONS: "false" }), isSecret);
+    expect(s.form).toEqual({});
+    // Back on: equal to the schema default, but NOT to the file — must be sent.
+    const sent2 = pickChanged(rows(s, { SANDY_SKIP_PERMISSIONS: "true" }));
+    expect(sent2).toEqual({ SANDY_SKIP_PERMISSIONS: "true" });
+  });
+
+  it("the same sequence works when the ack carries no read-back", () => {
+    let s = empty();
+    const sent1 = { SANDY_SKIP_PERMISSIONS: "false" };
+    s.form = sent1;
+    s = applySavedAck(s, { values: sent1, clearSecrets: [] }, {}, isSecret);
+    expect(s.values).toEqual({ SANDY_SKIP_PERMISSIONS: "false" });
+    expect(pickChanged(rows(s, { SANDY_SKIP_PERMISSIONS: "true" }))).toEqual({ SANDY_SKIP_PERMISSIONS: "true" });
+  });
+
+  it("an untouched form sends nothing", () => {
+    const s = ingestHostScope(empty(), host({ SANDY_SKIP_PERMISSIONS: "true", SANDY_MODEL: "claude" }));
+    expect(pickChanged(rows(s, { SANDY_SKIP_PERMISSIONS: "true", SANDY_MODEL: "claude" }))).toEqual({});
+  });
+
+  it("a draft survives an external file edit plus hide/show", () => {
+    let s = ingestHostScope(empty(), host({ SANDY_MODEL: "claude" }));
+    s.form = { SANDY_MODEL: "codex" };
+    // File edited elsewhere (another key changed), then the panel is re-shown.
+    s = ingestHostScope(s, host({ SANDY_MODEL: "claude", SANDY_SKIP_PERMISSIONS: "false" }));
+    expect(s.form).toEqual({ SANDY_MODEL: "codex" });
+    expect(s.values.SANDY_SKIP_PERMISSIONS).toBe("false");
+    // Save sends the draft and nothing for the externally edited key.
+    expect(pickChanged(rows(s, { SANDY_SKIP_PERMISSIONS: "false" }))).toEqual({ SANDY_MODEL: "codex" });
+  });
+
+  it("an edit made while the save is in flight survives the ack", () => {
+    let s = empty();
+    const sent = { SANDY_MODEL: "codex" };
+    // During the save: the user changes another key, and re-edits the sent one.
+    s.form = { SANDY_MODEL: "gemini", SANDY_SKIP_PERMISSIONS: "true" };
+    s = applySavedAck(s, { values: sent, clearSecrets: [] }, host({ SANDY_MODEL: "codex" }), isSecret);
+    expect(s.form).toEqual({ SANDY_MODEL: "gemini", SANDY_SKIP_PERMISSIONS: "true" });
+  });
+
+  it("an edit back to the OLD file value during the save is kept (pinned), and sent next", () => {
+    let s = ingestHostScope(empty(), host({ SANDY_MODEL: "claude" }));
+    const sent = { SANDY_MODEL: "codex" };
+    // Without pinning, "claude" equals the pre-save baseline and is dropped.
+    expect(pickChanged(rows(s, { SANDY_MODEL: "claude" }))).toEqual({});
+    s.form = pickChanged(rows(s, { SANDY_MODEL: "claude" }), new Set(Object.keys(sent)));
+    s = applySavedAck(s, { values: sent, clearSecrets: [] }, host({ SANDY_MODEL: "codex" }), isSecret);
+    expect(s.form).toEqual({ SANDY_MODEL: "claude" });
+    expect(pickChanged(rows(s, {}))).toEqual({ SANDY_MODEL: "claude" });
+  });
+
+  it("a typed secret and a clear mark made during the save survive the ack", () => {
+    let s = ingestHostScope(empty(), host({}, { ANTHROPIC_API_KEY: true, OPENAI_API_KEY: true }));
+    s.form = { GEMINI_API_KEY: "typed-later" };
+    s.clearPending = ["OPENAI_API_KEY"];
+    s = applySavedAck(s, { values: { SANDY_MODEL: "codex" }, clearSecrets: [] },
+      host({ SANDY_MODEL: "codex" }, { ANTHROPIC_API_KEY: true, OPENAI_API_KEY: true }), isSecret);
+    expect(s.form).toEqual({ GEMINI_API_KEY: "typed-later" });
+    expect(s.clearPending).toEqual(["OPENAI_API_KEY"]);
+  });
+
+  it("a clear that was sent is dropped from the marks once the ack confirms it", () => {
+    let s = ingestHostScope(empty(), host({}, { OPENAI_API_KEY: true }));
+    s.clearPending = ["OPENAI_API_KEY"];
+    s = applySavedAck(s, { values: {}, clearSecrets: ["OPENAI_API_KEY"] }, host({}, {}), isSecret);
+    expect(s.clearPending).toEqual([]);
+    expect(s.secretsPresent).toEqual({});
+  });
+
+  it("secrets are always sent when typed and never compared against a baseline", () => {
+    expect(pickChanged(rows(empty(), { ANTHROPIC_API_KEY: "sk" }))).toEqual({ ANTHROPIC_API_KEY: "sk" });
+  });
+});
+
+
+// sandy-ui <= 0.8.3 wrote every bool as true/false. sandy reads most of them as
+// 0/1, and SANDY_OFFLINE / SANDY_SUSPICIOUS exit on anything else — so one
+// toggle could stop every launch.
+describe("bool spelling per key", () => {
+  it("writes 0/1 for the keys sandy reads as 0/1, and true/false for SANDY_SKIP_PERMISSIONS", () => {
+    for (const k of ["SANDY_OFFLINE", "SANDY_SUSPICIOUS", "SANDY_ALLOW_NO_ISOLATION", "SANDY_EGRESS_STRICT",
+      "SANDY_VENV_OVERLAY", "SANDY_TOOL_AUDIT", "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"]) {
+      expect(serialize(field(k), true), k).toBe("1");
+      expect(serialize(field(k), false), k).toBe("0");
+    }
+    expect(serialize(field("SANDY_SKIP_PERMISSIONS"), false)).toBe("false");
+  });
+
+  it("every bool sandy 2.7.1 declares has a known spelling: a 0/1 or true/false default, or a listed exception", () => {
+    // A new sandy bool with no default would silently get 0/1. Fail here so
+    // someone checks how sandy actually reads it and lists it in saveRules.ts.
+    const known = new Set(["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "GOOGLE_GENAI_USE_VERTEXAI"]);
+    for (const f of schema.fields) {
+      if (f.type !== "bool" || f.stability === "deprecated") continue;
+      const d = f.default;
+      const ok = d === "0" || d === "1" || d === "true" || d === "false" || known.has(f.key);
+      expect(ok, `${f.key} default=${String(d)}`).toBe(true);
+      expect(["1", "true"]).toContain(boolEncoding(f).on);
+    }
   });
 });

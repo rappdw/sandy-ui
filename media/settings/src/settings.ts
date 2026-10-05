@@ -7,7 +7,7 @@
 
 export {}; // mark as module so local types don't leak into global scope
 
-import { boolChecked, displayValue, baselineValue, enumOptions } from "./saveRules";
+import { boolChecked, boolEncoding, boolUnrecognized, displayValue, baselineValue, enumOptions, pickChanged, applySavedAck, ingestHostScope, type FormRow } from "./saveRules";
 
 type Scope = "home" | "workspace";
 
@@ -38,6 +38,8 @@ interface ScopeState {
   initial: Record<string, string>;
   form: Record<string, string>;
   secretsPresent: Record<string, boolean>;
+  clearPending: string[];   // secrets marked "clear on save" (names only)
+  misplaced: string[];      // non-secret keys stored in .secrets by older builds
   exists: boolean;
   available: boolean;
 }
@@ -59,7 +61,8 @@ interface SchemaSource {
 
 type FromHost =
   | { type: "schema"; schema: Schema; source: SchemaSource; scopes: { home: ScopeFromHost; workspace: ScopeFromHost | null }; readOnly?: boolean }
-  | { type: "saved"; scope: Scope; values?: Record<string, string>; secretsPresent?: Record<string, boolean> };
+  | { type: "saveFailed"; scope: Scope }
+  | { type: "saved"; scope: Scope; values?: Record<string, string>; secretsPresent?: Record<string, boolean>; misplaced?: string[] };
 
 interface ScopeFromHost {
   configPath: string;
@@ -67,6 +70,7 @@ interface ScopeFromHost {
   values: Record<string, string>;
   exists: boolean;
   secretsPresent: Record<string, boolean>;
+  misplaced?: string[];
 }
 
 type ToHost =
@@ -107,11 +111,13 @@ type ToHost =
   // turned off (rappdw/sandy-ui#53) and the host refuses saves regardless; this
   // only makes the panel say so instead of offering controls that do nothing.
   let readOnly = true;
-  let pendingSave: { scope: Scope; values: Record<string, string>; clearSecrets: string[] } | null = null;
+  // `reverted`: Revert was clicked while this save was in flight — the user
+  // gave up on their edits, so nothing is pinned (see persistFormFromDom).
+  let pendingSave: { scope: Scope; values: Record<string, string>; clearSecrets: string[]; reverted?: boolean } | null = null;
   const emptyScope = (): ScopeState => ({
     configPath: "", secretsPath: "",
     values: {}, initial: {}, form: {},
-    secretsPresent: {},
+    secretsPresent: {}, clearPending: [], misplaced: [],
     exists: false, available: false,
   });
   const scopes: Record<Scope, ScopeState> = {
@@ -168,15 +174,13 @@ type ToHost =
   function ingestScope(target: ScopeState, src: ScopeFromHost): void {
     target.configPath = src.configPath;
     target.secretsPath = src.secretsPath;
-    target.values = src.values || {};
     target.exists = !!src.exists;
-    target.secretsPresent = src.secretsPresent || {};
     target.available = true;
     // s.form holds ONLY the user's unsaved edits; untouched keys display
     // straight from s.values. The old model copied every file value into
     // form, so after a hide/show (or any edit) a stale snapshot was compared
     // against the current file — overwriting changes made in an editor.
-    target.form = target.form ?? {};
+    Object.assign(target, ingestHostScope(target, src));
     target.initial = target.initial ?? {};
   }
 
@@ -197,37 +201,23 @@ type ToHost =
       renderTabs();
       renderSchemaWarn();
       renderActive();
+    } else if (m.type === "saveFailed") {
+      // Nothing was written; the edits are still in the form. Allow a retry.
+      pendingSave = null;
     } else if (m.type === "saved") {
       const scope = m.scope || activeScope;
-      // Use the payload captured at save-click, NOT a fresh collect(): the
-      // ack is async, and if the user switched tabs in between, collect()
-      // would read the OTHER scope's DOM into this scope's baseline.
-      const usePending = pendingSave !== null && pendingSave.scope === scope;
-      const v = usePending ? pendingSave!.values : collect();
-      const clearedKeys = usePending ? pendingSave!.clearSecrets : [];
+      // Compare against the payload captured at save-click, NOT a fresh
+      // collect(): if the user switched tabs meanwhile, collect() would read
+      // the OTHER scope's DOM.
+      if (scope === activeScope) persistFormFromDom();
+      const sent = pendingSave !== null && pendingSave.scope === scope
+        ? pendingSave : { scope, values: {}, clearSecrets: [] };
       pendingSave = null;
-      // The host re-read the file after writing it; that is the new baseline.
-      // Without this, the baseline stayed at the PRE-save file, so an edit
-      // that was then reverted compared as "unchanged" and was never sent —
-      // a setting could stay on in the file while the form showed it off.
-      if (m.values) scopes[scope].values = m.values;
-      // Drafts are now in the file. `initial` is left empty: assigning the
-      // payload to it used to copy typed secrets into persisted webview state.
-      scopes[scope].form = {};
+      const isSecret = (k: string) => schema?.fields.find(f => f.key === k)?.type === "secret";
+      Object.assign(scopes[scope], applySavedAck(scopes[scope], sent, m, isSecret));
       scopes[scope].initial = {};
-      if (m.secretsPresent) {
-        scopes[scope].secretsPresent = { ...m.secretsPresent };
-      } else {
-        // Older host without the fields: infer presence from what was sent.
-        for (const f of (schema?.fields ?? [])) {
-          if ((f.type === "secret" || f.tier === "secrets") && v[f.key]) {
-            scopes[scope].secretsPresent[f.key] = true;
-          }
-        }
-        for (const k of clearedKeys) scopes[scope].secretsPresent[k] = false;
-      }
       saveState();
-      renderActive();  // refresh badges
+      if (scope === activeScope) renderActive();
     }
   });
 
@@ -303,15 +293,28 @@ type ToHost =
       if (f.stability === "deprecated" && !inFile) continue;
       const eff: FieldDef = f.stability === "deprecated"
         ? { ...f, type: "string", description: `Deprecated: current sandy may refuse this key. Clear it to remove it from the file.${f.description ? " " + f.description : ""}` }
-        : f;
-      const shownRaw = displayValue(eff, s.form[f.key] ?? s.values[f.key]);
+        // sandy 2.x lists no choices for SANDY_AGENT: a checkbox group with no
+        // boxes showed nothing and couldn't be edited. Comma-separated text.
+        : f.type === "agent_combo" && !(f.options?.length)
+          ? { ...f, type: "string" }
+          : f;
+      // A secret's control shows only a draft typed this session (kept in
+      // memory, never persisted) — never a default, which Save would send.
+      const shownRaw = eff.type === "secret" ? s.form[f.key] : displayValue(eff, s.form[f.key] ?? s.values[f.key]);
       const shown = shownRaw == null ? undefined : String(shownRaw);
       const baseline = domBaseline(eff, s.values[f.key]);
 
       // One field must never take down the form. Before this guard, a single
       // throw here (an unrecognized type) silently dropped every later field.
       try {
-        form.appendChild(renderField(eff, shown, s.secretsPresent, baseline));
+        const row = renderField(eff, shown, s, baseline);
+        if (s.misplaced.includes(f.key)) {
+          const d = document.createElement("p");
+          d.className = "desc";
+          d.textContent = `Stored in ${s.secretsPath || ".secrets"} by an older sandy-ui, where it overrides the config file. Saving this setting moves it to the config file.`;
+          row.appendChild(d);
+        }
+        form.appendChild(row);
       } catch (e) {
         const err = e as { message?: string };
         fail(`renderField(${f.key})`, e);
@@ -344,8 +347,8 @@ type ToHost =
       `${s.configPath || "the config file"} directly.`;
   }
 
-  function renderField(f: FieldDef, value: string | undefined, secretsPresent: Record<string, boolean>, baseline: string): HTMLElement {
-    secretsPresent = secretsPresent || {};
+  function renderField(f: FieldDef, value: string | undefined, s: ScopeState, baseline: string): HTMLElement {
+    const secretsPresent = s.secretsPresent || {};
     const row = document.createElement("div");
     row.className = "row" + (f.privileged ? " privileged" : "");
 
@@ -355,6 +358,7 @@ type ToHost =
     row.appendChild(label);
 
     let input: HTMLElement & { dataset: DOMStringMap };
+    let note: HTMLElement | null = null;   // shown under the control
 
     switch (f.type) {
       case "string":
@@ -380,7 +384,17 @@ type ToHost =
       case "bool": {
         const i = document.createElement("input");
         i.type = "checkbox";
-        i.checked = boolChecked(value);
+        i.checked = boolChecked(f, value);
+        // The control writes this key's own spelling (1/0 or true/false).
+        const enc = boolEncoding(f);
+        i.dataset.on = enc.on;
+        i.dataset.off = enc.off;
+        const raw = s.values[f.key];
+        if (boolUnrecognized(f, raw)) {
+          note = document.createElement("p");
+          note.className = "desc";
+          note.textContent = `The file has "${raw}", which sandy doesn't read as on for this setting (it expects ${enc.on} or ${enc.off}). Toggle and save to rewrite it.`;
+        }
         input = i;
         break;
       }
@@ -428,7 +442,7 @@ type ToHost =
         const i = document.createElement("input");
         i.type = "password";
         i.placeholder = isSet ? "(leave blank to keep current value)" : "(enter to set)";
-        i.value = "";
+        i.value = value ?? "";
         const reveal = document.createElement("button");
         reveal.type = "button";
         reveal.className = "reveal";
@@ -449,17 +463,8 @@ type ToHost =
           const clearBtn = document.createElement("button");
           clearBtn.type = "button";
           clearBtn.className = "clear-secret";
-          clearBtn.textContent = "clear";
-          clearBtn.addEventListener("click", () => {
-            const clearing = row.dataset.clearSecret === f.key;
+          const setClearing = (clearing: boolean) => {
             if (clearing) {
-              delete row.dataset.clearSecret;
-              badge.className = "badge badge-set";
-              badge.textContent = "✓ set";
-              i.disabled = false;
-              i.placeholder = "(leave blank to keep current value)";
-              clearBtn.textContent = "clear";
-            } else {
               row.dataset.clearSecret = f.key;
               badge.className = "badge badge-clearing";
               badge.textContent = "will clear on save";
@@ -467,7 +472,19 @@ type ToHost =
               i.disabled = true;
               i.placeholder = "(will be cleared)";
               clearBtn.textContent = "undo";
+            } else {
+              delete row.dataset.clearSecret;
+              badge.className = "badge badge-set";
+              badge.textContent = "✓ set";
+              i.disabled = false;
+              i.placeholder = "(leave blank to keep current value)";
+              clearBtn.textContent = "clear";
             }
+          };
+          // The mark survives re-render (a save ack, a tab switch, hide/show).
+          setClearing(s.clearPending.includes(f.key));
+          clearBtn.addEventListener("click", () => {
+            setClearing(row.dataset.clearSecret !== f.key);
             persistFormFromDom();
           });
           wrap.appendChild(clearBtn);
@@ -508,6 +525,7 @@ type ToHost =
     // FILE's value (not drafts). Save sends a key only when it differs.
     input.dataset.baseline = baseline;
     row.appendChild(input);
+    if (note) row.appendChild(note);
 
     if (f.description) {
       const d = document.createElement("p"); d.className = "desc"; d.textContent = f.description;
@@ -524,8 +542,8 @@ type ToHost =
 
   // Every rendered row's current value, with the baseline it was rendered
   // against (undefined for secrets, which are only ever sent when typed).
-  function collectRows(): Array<{ key: string; value: string; baseline: string | undefined }> {
-    const rows: Array<{ key: string; value: string; baseline: string | undefined }> = [];
+  function collectRows(): FormRow[] {
+    const rows: FormRow[] = [];
     for (const row of Array.from($("form").children)) {
       const group = row.querySelector(".checkbox-group") as HTMLElement | null;
       if (group) {
@@ -543,11 +561,9 @@ type ToHost =
       const k = keyEl.dataset.key!;
       const t = keyEl.dataset.type!;
       if (t === "bool") {
-        // "true"/"false" — sandy's bash tests literal `= "true"` and its node
-        // paths test `!== 'false'`; the old "1"/"0" encoding matched NEITHER,
-        // so unchecking SANDY_SKIP_PERMISSIONS left the bypass active (review
-        // finding B1).
-        rows.push({ key: k, value: (keyEl as HTMLInputElement).checked ? "true" : "false", baseline: keyEl.dataset.baseline });
+        // Each key's own spelling — see boolEncoding in saveRules.ts.
+        const on = keyEl.dataset.on ?? "1", off = keyEl.dataset.off ?? "0";
+        rows.push({ key: k, value: (keyEl as HTMLInputElement).checked ? on : off, baseline: keyEl.dataset.baseline });
       } else if (t === "secret") {
         const v = (keyEl as HTMLInputElement).value;
         if (v) rows.push({ key: k, value: v, baseline: undefined });  // skip blank — keeps existing
@@ -561,20 +577,12 @@ type ToHost =
     return rows;
   }
 
-  // Every rendered value — the form's draft state and the post-save display
-  // baseline. NOT what Save sends; see collectChanged().
-  function collect(): Record<string, string> {
-    return Object.fromEntries(collectRows().map(r => [r.key, r.value]));
-  }
-
   // What Save sends: only keys whose value differs from what the file would
   // display. The host merges into the existing file and keeps every key it
   // isn't sent, so skipping an untouched key is always safe — and writing every
   // rendered key was not (see saveRules.ts for what it broke).
   function collectChanged(): Record<string, string> {
-    return Object.fromEntries(
-      collectRows().filter(r => r.baseline === undefined || r.value !== r.baseline).map(r => [r.key, r.value]),
-    );
+    return pickChanged(collectRows());
   }
 
   // Rows currently toggled to "will clear on save". Excludes any row where
@@ -595,7 +603,13 @@ type ToHost =
 
   function persistFormFromDom(): void {
     if (!schema) return;
-    scopes[activeScope].form = collectChanged();   // edits only — see ingestScope
+    // Edits only — see ingestScope. While a save of this scope is in flight,
+    // keys it sent stay pinned: an edit back to the old file value must
+    // survive the ack, which moves the baseline to the sent value.
+    const pinned = pendingSave?.scope === activeScope && !pendingSave.reverted
+      ? new Set(Object.keys(pendingSave.values)) : undefined;
+    scopes[activeScope].form = pickChanged(collectRows(), pinned);
+    scopes[activeScope].clearPending = collectClearSecrets();
     saveState();
   }
 
@@ -609,7 +623,7 @@ type ToHost =
     // finding S2). Hide/show loses an unsaved secret entry; acceptable.
     const secretKeys = new Set(
       (schema?.fields ?? [])
-        .filter(f => f.type === "secret" || f.tier === "secrets")
+        .filter(f => f.type === "secret")
         .map(f => f.key),
     );
     const stripSecrets = (r: Record<string, string>): Record<string, string> => {
@@ -627,6 +641,7 @@ type ToHost =
 
   // ---- Save / Revert -------------------------------------------------------
   $("save").addEventListener("click", () => {
+    if (pendingSave) return;   // one save in flight at a time
     persistFormFromDom();
     const clearSecrets = collectClearSecrets();
     const values = collectChanged();
@@ -635,6 +650,8 @@ type ToHost =
   });
   $("revert").addEventListener("click", () => {
     scopes[activeScope].form = {};   // discard unsaved edits; display falls back to the file
+    scopes[activeScope].clearPending = [];
+    if (pendingSave?.scope === activeScope) pendingSave.reverted = true;
     saveState();
     renderActive();
   });

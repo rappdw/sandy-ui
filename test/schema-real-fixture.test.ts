@@ -4,6 +4,7 @@ import * as path from "path";
 import { parseSandySchema } from "../src/schema/parse";
 import { evaluateCompat } from "../src/schema/compat";
 import { FIELD_TYPES } from "../src/schema/types";
+import { partitionByTier } from "../src/settings/configIO";
 
 // Real `sandy --print-schema` output from sandy v2.7.1 (schema_version 4),
 // captured 2026-10-02. 0.8.2 shipped two bugs against exactly this document: the
@@ -22,6 +23,19 @@ describe("real sandy 2.7.1 --print-schema", () => {
     expect(s.fields.length).toBe(62);
     expect(s.fields.every((f) => f.key && f.type)).toBe(true);
     expect(s.capabilities?.daemonMode).toBe(true);
+  });
+
+  it("routes only secret-type keys to .secrets — none of the 16 privileged non-secrets (#53)", () => {
+    const s = parseSandySchema(raw);
+    const schema = { ...s };
+    const all = Object.fromEntries(s.fields.map((f) => [f.key, "x"]));
+    const { secrets } = partitionByTier(schema, all);
+    const secretTyped = s.fields.filter((f) => f.type === "secret").map((f) => f.key).sort();
+    expect(Object.keys(secrets).sort()).toEqual(secretTyped);
+    for (const k of ["SANDY_ALLOW_NO_ISOLATION", "SANDY_SKIP_PERMISSIONS", "SANDY_ALLOW_HOSTS", "SANDY_SSH", "SANDY_EXTRA_ENV"]) {
+      expect(secrets[k], k).toBeUndefined();
+    }
+    expect(s.fields.filter((f) => f.tier === "secrets" && f.type !== "secret")).toEqual([]);
   });
 
   it("passes the compat gate cleanly", () => {

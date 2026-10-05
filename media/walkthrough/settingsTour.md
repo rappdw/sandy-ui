@@ -7,6 +7,6 @@ Two scope tabs, each showing its own file:
 
 Privileged keys (network/isolation toggles, credential variables) get a yellow border. Setting one from the **workspace** tab triggers a pre-flight approval modal on next launch — it renders the raw `KEY=VALUE` block verbatim, no HTML interpretation, so you see exactly what sandy will read. Home-set privileged keys skip the modal since you set them in your own directory.
 
-**In this version the panel is read-only.** It shows every setting your sandy supports, but saving from it is turned off while a bug in how it writes settings is fixed. To change a setting, edit the file directly: the panel names it at the top.
+**Save writes only what you changed.** Settings you don't touch stay as they are, so sandy's own defaults keep applying. Comments and the order of lines in the file are kept. Secrets (API keys, tokens) go to `.sandy/.secrets` next to the config file, and the panel shows only whether each is set, never its value.
 
 [Open Settings](command:sandy.settings.open)

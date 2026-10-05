@@ -66,12 +66,13 @@ panel says which file to edit. Re-enabling is #53, in 0.9.0.
 Everything sandy unblocked, plus the sandy maintainer's critique of how we use the contract.
 Nothing here needs sandy changes.
 
-- **Re-enable Settings Save** (#53) — the 0.8.3 hotfix turned it off. Route keys by
-  `type === "secret"` instead of by where sandy *reads* them from; migrate the non-secret keys
-  older builds wrote into `.secrets` (after confirming sandy's precedence between the two
-  files); preserve comments on write; fix the edit-during-save and secret-in-config edges; and
-  extract the ack/restore state transitions into pure, tested functions. The change-only save
-  model and write-only-on-change host behavior are already in place, dormant.
+- **Re-enable Settings Save** (#53) ✅ — keys route by `type === "secret"` alone. sandy
+  loads config and then `.secrets` within a scope (confirmed in its `_load_sandy_config`), so
+  a non-secret key an older build left in `.secrets` *overrides* config: the form shows it
+  from there, flags it, and any write or clear of it removes the `.secrets` copy. The form
+  reads files with sandy's own parsing, writes keep comments, order and permissions, secret
+  values never reach the webview, and edits made during a save survive the ack. The state
+  transitions live in `saveRules.ts` as pure, tested functions.
 - **Delete the last private-layout dependency** (#158). Our `sandyState.ts` globs
   `~/.sandy/sandboxes/.<base>-<8hex>.lock` to *remove* stale locks. sandy now does this
   itself — every launch (including `--start`) clears a provably-stale lock for its own
@@ -232,8 +233,8 @@ docs/reviews/2026-07-03-code-review.md where applicable.
 | D12 | No scrollback replay on reattach (inner tmux preserves live screen + its own scrollback via copy-mode; xterm scrollback starts empty). | **accept for 1.0** (revisit with tmux capture-pane replay post-1.0) |
 | D13 | Multi-root workspaces: only `workspaceFolders[0]` is consulted (A6). | **accept for 1.0**, document |
 | D14 | `launchCommand` parsing breaks on quoted args with spaces (A7). | **accept for 1.0**, document |
-| D15 | Settings save materializes rendered schema defaults into the file (A9). | **fixed in code in 0.8.3, shipped dormant** — stopped being defensible once the full sandy 2.x schema rendered (a Save would have written `SANDY_RELAY=false`, which sandy ≥ 2.6.0 refuses). The change-only save path is in place; Save itself is off pending #53. |
+| D15 | Settings save materializes rendered schema defaults into the file (A9). | **fixed in code in 0.8.3, shipped dormant** — stopped being defensible once the full sandy 2.x schema rendered (a Save would have written `SANDY_RELAY=false`, which sandy ≥ 2.6.0 refuses). The change-only save path shipped dormant in 0.8.3 and went live with #53 (0.9.0). |
 | D16 | xterm 6 + TypeScript 7 migrations parked by dependabot policy (majors are deliberate work; TS 7 empirically broke CI 2026-07-15). | **post-1.0** |
 
 D1–D8 shipped in 0.7.0/0.8.0. D9/D10 are 0.10.0 (#33/#34). D11 shipped as
-`sandy.terminal.mouseMode`. D15 addressed in 0.8.3 (dormant, #53). D12–D14 and D16 remain accepted for 1.0 / post-1.0 as recorded.
+`sandy.terminal.mouseMode`. D15 addressed in 0.8.3 (live once #53 re-enabled Save). D12–D14 and D16 remain accepted for 1.0 / post-1.0 as recorded.

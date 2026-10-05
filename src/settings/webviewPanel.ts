@@ -2,10 +2,10 @@ import * as vscode from "vscode";
 import * as fs from "fs";
 import {
   Schema, Scope,
-  readKv, saveScope,
+  readSandyKv, readScopeView, saveScope,
   HOME_CONFIG, HOME_SECRETS,
   workspaceConfigPath, workspaceSecretsPath,
-  secretsPathFor,
+  configPathFor, secretsPathFor,
 } from "./configIO";
 // Schema source: invoke `sandy --print-schema` (cached by sandy version);
 // fall back to the bundled mock if sandy isn't on PATH or the invocation
@@ -14,14 +14,13 @@ import {
 import schemaMock from "../mocks/schema.json";
 import { getCachedSchema } from "../schema/cache";
 
-// Settings Save is OFF in 0.8.3 — rappdw/sandy-ui#53. Three review passes of
-// the hotfix found the save path writing keys to the wrong file: 16 non-secret
-// privileged keys (SANDY_ALLOW_NO_ISOLATION, SANDY_SKIP_PERMISSIONS,
-// SANDY_ALLOW_HOSTS, …) were routed into .secrets, where the form could neither
-// show nor clear them. While this is false the host refuses EVERY save, no
-// matter what the webview sends; the webview's read-only view is presentation
-// only. Flip it once every item in #53 is done and tested.
-const SETTINGS_SAVE_ENABLED = false;
+// Settings Save was OFF in 0.8.3 (rappdw/sandy-ui#53): the save path routed 16
+// non-secret privileged keys (SANDY_ALLOW_NO_ISOLATION, …) into .secrets, where
+// the form could neither show nor clear them. Fixed by routing on type alone
+// and migrating misplaced keys (configIO.saveScope). The switch stays as a kill
+// switch: while false the host refuses EVERY save, whatever the webview sends,
+// and the webview renders read-only.
+const SETTINGS_SAVE_ENABLED = true;
 
 const out = vscode.window.createOutputChannel("Sandy Settings");
 const log = (msg: string) => out.appendLine(`[${new Date().toISOString()}] ${msg}`);
@@ -74,43 +73,32 @@ export function openSettingsPanel(ctx: vscode.ExtensionContext) {
       case "ready": {
         const resolution = await schemaPromise;
         const schema = resolution.schema;
-        const homeConfig    = readKv(HOME_CONFIG);
-        const homeSecrets   = readKv(HOME_SECRETS);
-        const wsConfig      = wsConfigPath  ? readKv(wsConfigPath)  : {};
-        const wsSecrets     = wsSecretsPath ? readKv(wsSecretsPath) : {};
-
-        const presence = (kv: Record<string, string>) => {
-          const out: Record<string, boolean> = {};
-          for (const k of Object.keys(kv)) out[k] = true;
-          return out;
+        const describe = (label: string, file: string | undefined) => {
+          const n = file ? Object.keys(readSandyKv(file)).length : 0;
+          log(`  ${label} = ${file ?? "(none)"} (exists=${file ? fs.existsSync(file) : false}, ${n} keys)`);
         };
-
         log(`ready`);
-        log(`  home   config = ${HOME_CONFIG}    (exists=${fs.existsSync(HOME_CONFIG)},    ${Object.keys(homeConfig).length} keys)`);
-        log(`  home   secrets= ${HOME_SECRETS}   (exists=${fs.existsSync(HOME_SECRETS)},   ${Object.keys(homeSecrets).length} keys)`);
-        log(`  ws     config = ${wsConfigPath  ?? "(none)"} (exists=${wsConfigPath  ? fs.existsSync(wsConfigPath)  : false}, ${Object.keys(wsConfig).length} keys)`);
-        log(`  ws     secrets= ${wsSecretsPath ?? "(none)"} (exists=${wsSecretsPath ? fs.existsSync(wsSecretsPath) : false}, ${Object.keys(wsSecrets).length} keys)`);
+        describe("home   config ", HOME_CONFIG);
+        describe("home   secrets", HOME_SECRETS);
+        describe("ws     config ", wsConfigPath);
+        describe("ws     secrets", wsSecretsPath);
 
+        const scopeMessage = (scope: Scope) => {
+          const view = readScopeView(scope, ws, schema);
+          if (view.misplaced.length) {
+            log(`  ${scope}: non-secret keys stored in .secrets (moved to config when saved): ${view.misplaced.join(",")}`);
+          }
+          const configPath = configPathFor(scope, ws);
+          return { configPath, secretsPath: secretsPathFor(scope, ws), exists: fs.existsSync(configPath), ...view };
+        };
         panel.webview.postMessage({
           type: "schema",
           readOnly: !SETTINGS_SAVE_ENABLED,
           schema,
           source: { kind: resolution.source, error: resolution.error },
           scopes: {
-            home: {
-              configPath:     HOME_CONFIG,
-              secretsPath:    HOME_SECRETS,
-              values:         homeConfig,
-              exists:         fs.existsSync(HOME_CONFIG),
-              secretsPresent: presence(homeSecrets),
-            },
-            workspace: wsConfigPath ? {
-              configPath:     wsConfigPath,
-              secretsPath:    wsSecretsPath,
-              values:         wsConfig,
-              exists:         fs.existsSync(wsConfigPath),
-              secretsPresent: presence(wsSecrets),
-            } : null,
+            home:      scopeMessage("home"),
+            workspace: ws ? scopeMessage("workspace") : null,
           },
         });
         break;
@@ -119,6 +107,7 @@ export function openSettingsPanel(ctx: vscode.ExtensionContext) {
         if (!SETTINGS_SAVE_ENABLED) {
           log(`save refused (scope=${m.scope}): saving from the Settings panel is disabled in this build — rappdw/sandy-ui#53`);
           vscode.window.showWarningMessage("Sandy: saving from the Settings panel is turned off in this version. Edit the config file directly for now.");
+          panel.webview.postMessage({ type: "saveFailed", scope: m.scope });
           break;
         }
         const scope = m.scope as Scope;
@@ -131,48 +120,42 @@ export function openSettingsPanel(ctx: vscode.ExtensionContext) {
             throw new Error("No workspace folder open — cannot save to workspace scope.");
           }
           const schema = (await schemaPromise).schema;
-          const { refusedClears } = saveScope(scope, ws, schema, incoming, clearSecrets);
-          if (refusedClears.length) log(`REFUSED clearSecrets (not schema secret-tier keys): ${refusedClears.join(",")}`);
-          const configTarget  = scope === "home" ? HOME_CONFIG  : wsConfigPath!;
+          const result = saveScope(scope, ws, schema, incoming, clearSecrets);
+          if (result.refusedClears.length) log(`REFUSED clearSecrets (not secret-type schema keys): ${result.refusedClears.join(",")}`);
+          if (result.refusedKeys.length) log(`REFUSED keys (not in the schema, or value has a line break): ${result.refusedKeys.join(",")}`);
+          const configTarget  = configPathFor(scope, ws);
           const secretsTarget = secretsPathFor(scope, ws);
-          const verifyConfig  = readKv(configTarget);
-          const verifySecrets = readKv(secretsTarget);
+          const view = readScopeView(scope, ws, schema);
           // Read-back verification logs key names + status ONLY — never the
-          // values. The old form printed plaintext values (including secrets)
-          // to this output channel (review finding S1). "" incoming means the
-          // key was cleared, so verify absence rather than equality.
+          // values (review finding S1). It checks what sandy will now read,
+          // .secrets included, so a stale .secrets copy shows up as a MISMATCH.
           for (const [k, v] of Object.entries(incoming)) {
-            const got = verifyConfig[k] ?? verifySecrets[k];
-            const where = verifyConfig[k] != null ? "config" : verifySecrets[k] != null ? "secrets" : "absent";
-            if (v === "") {
-              if (got === undefined) log(`ok ${k} (cleared)`);
-              else log(`MISMATCH ${k}: expected cleared, still present in ${where}`);
-            } else if (got !== v) {
-              log(`MISMATCH ${k}: read-back differs (values not logged; len wrote=${v.length} read=${got?.length ?? 0})`);
-            } else {
-              log(`ok ${k} (${where})`);
+            if (result.refusedKeys.includes(k)) continue;
+            if (k in view.secretsPresent || schema.fields.find(f => f.key === k)?.type === "secret") {
+              log(view.secretsPresent[k] ? `ok ${k} (secret set)` : `MISMATCH ${k}: secret not present after save`);
+              continue;
             }
+            const got = view.values[k];
+            if (v === "") log(got === undefined ? `ok ${k} (cleared)` : `MISMATCH ${k}: expected cleared, still set`);
+            else if (got !== v) log(`MISMATCH ${k}: read-back differs (values not logged; len wrote=${v.length} read=${got?.length ?? 0})`);
+            else log(`ok ${k}`);
           }
-          // clearSecrets keys never appear in `incoming` (a cleared secret
-          // row's input stays blank, and collect() skips blank secrets), so
-          // they need their own expect-absent-from-secrets check.
-          const verifiedClears = clearSecrets.filter(k => !refusedClears.includes(k));
-          for (const k of verifiedClears) {
-            if (verifySecrets[k] === undefined) log(`ok ${k} (secret cleared)`);
-            else log(`MISMATCH ${k}: expected cleared, still present in secrets`);
+          for (const k of clearSecrets) {
+            if (result.refusedClears.includes(k)) continue;
+            log(view.secretsPresent[k] ? `MISMATCH ${k}: expected cleared, still present` : `ok ${k} (secret cleared)`);
           }
-          const wroteSecrets = Object.keys(incoming).some(k => incoming[k] !== "" && verifySecrets[k] != null);
-          vscode.window.showInformationMessage(`Saved to ${configTarget}${wroteSecrets ? ` and ${secretsTarget}` : ""}`);
-          // Send back the file as it now is: the form's baseline must track
-          // the file, or an edit that is later reverted compares as unchanged
-          // and is never saved. Config VALUES only — secrets travel as
-          // presence flags, exactly as in the initial state message.
-          const secretsPresent: Record<string, boolean> = {};
-          for (const k of Object.keys(verifySecrets)) secretsPresent[k] = true;
-          panel.webview.postMessage({ type: "saved", scope, values: verifyConfig, secretsPresent });
+          const written = [result.wroteConfig && configTarget, result.wroteSecrets && secretsTarget].filter(Boolean);
+          if (written.length) vscode.window.showInformationMessage(`Saved to ${written.join(" and ")}`);
+          else vscode.window.showInformationMessage("Sandy: no changes to save.");
+          // Send back the files as they now are: the form's baseline must
+          // track the file, or an edit that is later reverted compares as
+          // unchanged and is never saved. Same shape as the initial message:
+          // non-secret values, secrets as presence flags only.
+          panel.webview.postMessage({ type: "saved", scope, ...view });
         } catch (e: any) {
           log(`save failed: ${e?.message ?? e}`);
           vscode.window.showErrorMessage(`Save failed: ${e?.message ?? e}`);
+          panel.webview.postMessage({ type: "saveFailed", scope: m.scope });
         }
         break;
       }

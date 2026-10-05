@@ -63,9 +63,11 @@ function toFieldDef(k: SandyConfigKey, privileged: boolean | undefined, tier: Fi
 }
 
 function defaultTierFor(k: SandyConfigKey, fallback: FieldDef["tier"]): FieldDef["tier"] {
-  // Secret type or sources-includes-home_secrets → "secrets" tier.
+  // Only secret-TYPE keys belong in .secrets. `sources` lists where sandy can
+  // READ a key from, and every privileged key lists home_secrets — routing on
+  // that sent SANDY_ALLOW_NO_ISOLATION and 15 other non-secrets to .secrets,
+  // where the form couldn't show or clear them (sandy-ui#53).
   if (k.type === "secret") return "secrets";
-  if (k.sources?.includes("home_secrets")) return "secrets";
   // Workspace-preferred sources → "workspace" tier.
   if (k.sources?.length === 1 && k.sources[0] === "workspace_config") return "workspace";
   // Otherwise the caller's fallback (e.g., privileged_keys default to "workspace",

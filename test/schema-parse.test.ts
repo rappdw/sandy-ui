@@ -72,12 +72,12 @@ describe("parseSandySchema — passive_keys tier inference", () => {
     expect(parseSandySchema(sandy).fields[0].tier).toBe("secrets");
   });
 
-  it("routes sources=['home_secrets'] to tier 'secrets'", () => {
+  it("does NOT route a non-secret to 'secrets' because sandy can read it from home_secrets (#53)", () => {
     const sandy: SandySchema = {
       ...minimal,
-      config: { passive_keys: [{ name: "TELEGRAM_BOT_TOKEN", type: "string", sources: ["home_secrets"] }] },
+      config: { privileged_keys: [{ name: "SANDY_ALLOW_NO_ISOLATION", type: "bool", sources: ["home_config", "home_secrets", "env"] }] },
     };
-    expect(parseSandySchema(sandy).fields[0].tier).toBe("secrets");
+    expect(parseSandySchema(sandy).fields[0].tier).toBe("workspace");
   });
 
   it("routes sources=['workspace_config'] only to tier 'workspace'", () => {
