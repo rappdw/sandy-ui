@@ -109,7 +109,12 @@ describe("Daemon lifecycle (fake-sandy)", function () {
   function sandyTabs(): vscode.Tab[] {
     return vscode.window.tabGroups.all
       .flatMap(g => g.tabs)
-      .filter(t => t.input instanceof vscode.TabInputWebview && t.label.startsWith("Sandy"));
+      .filter(t => t.input instanceof vscode.TabInputWebview && t.input.viewType.endsWith("sandy.terminal"));
+  }
+  // Tab titles are `<workspace> · [● ]<detail>` (src/terminal/panelTitle.ts);
+  // the state lives in the detail.
+  function titleDetail(t: vscode.Tab): string {
+    return t.label.split(" · ").slice(1).join(" · ").replace(/^● /, "");
   }
   async function closeSandyTabs(): Promise<void> {
     const tabs = sandyTabs();
@@ -167,7 +172,7 @@ describe("Daemon lifecycle (fake-sandy)", function () {
       return startIdx !== -1 && attachIdx !== -1 && attachIdx > startIdx;
     }, 15_000);
 
-    assert.ok(sandyTabs().length > 0, "expected a Sandy-labeled tab to be open");
+    assert.ok(sandyTabs().length > 0, "expected a Sandy terminal tab to be open");
 
     await until(() => sessionExists(sandboxName) && readSession(sandboxName).attached_clients === 1, 10_000);
   });
@@ -318,7 +323,7 @@ describe("Daemon lifecycle (fake-sandy)", function () {
       const attachIdx = post.indexOf(`--attach --workspace ${ws}`);
       return startIdx !== -1 && attachIdx !== -1 && attachIdx > startIdx;
     }, 15_000);
-    assert.ok(sandyTabs().length > 0, "expected a Sandy-labeled tab to be open");
+    assert.ok(sandyTabs().length > 0, "expected a Sandy terminal tab to be open");
 
     await until(() => sessionExists(sandboxName) && readSession(sandboxName).attached_clients === 1, 10_000);
 
@@ -343,9 +348,9 @@ describe("Daemon lifecycle (fake-sandy)", function () {
     // No webviewPanel-registered onExit competes for this title: the
     // "Sandy (exit N)" handler lives in the legacy/direct spawn path, and the
     // other is on the --start pty, neither of which is this attach pty.
-    await until(() => sandyTabs().some(t => t.label === "Sandy (detached)"), 10_000);
+    await until(() => sandyTabs().some(t => titleDetail(t) === "Sandy (detached)"), 10_000);
 
-    const labels = sandyTabs().map(t => t.label);
+    const labels = sandyTabs().map(titleDetail);
     assert.ok(
       labels.includes("Sandy (detached)"),
       `signal-killed attach client must classify as detached; tab labels were ${JSON.stringify(labels)}`

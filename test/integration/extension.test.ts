@@ -27,7 +27,6 @@ const EXPECTED_COMMANDS = [
   "sandy.tree.copyWorkspacePath",
   "sandy.tree.detach",
   "sandy.tree.stop",
-  "sandy.tree.removeLock",
   "sandy.tree.deleteSandbox",
 ];
 
