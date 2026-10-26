@@ -18,6 +18,7 @@ import * as cp from "child_process";
 import { parseSandyJson } from "../state/parseJson";
 import type { SandyState } from "../state/types";
 import { newRestartWatch, observeRestart, RESTART_POLL_MS, RESTART_WAIT_MS } from "../daemon/restart";
+import { refreshTmux } from "./tmuxRefresh";
 import { Schema } from "../settings/configIO";
 
 const out = vscode.window.createOutputChannel("Sandy");
@@ -29,6 +30,7 @@ type ToHost =
   | { type: "input"; data: string }
   | { type: "resize"; cols: number; rows: number }
   | { type: "wake";   cols: number; rows: number }
+  | { type: "repaint"; cols: number; rows: number }
   | { type: "osc";    event: OscEvent }
   | { type: "openExternal"; uri: string }
   | { type: "log";    level: "info" | "error"; msg: string };
@@ -195,8 +197,10 @@ export async function openTerminalPanel(
 
   // `sandy --approvals` (2.7.0+) drives the launch preview, the post-start
   // "running without" warning, and the exit-6 explanation.
-  const approvalsCapable = (await getCachedSchema(ctx.globalStorageUri.fsPath, schemaMock as Schema))
-    .schema?.capabilities?.approvalsReport === true;
+  const caps = (await getCachedSchema(ctx.globalStorageUri.fsPath, schemaMock as Schema)).schema?.capabilities;
+  const approvalsCapable = caps?.approvalsReport === true;
+  // `sandy --exec` (2.7.0) lets a repaint ask tmux to redraw without a resize.
+  const execCapable = caps?.execCommand === true;
   if (!isReattach) {
     // Read-only launch preview (decision C). sandy asks for approval itself, in
     // the terminal; sandy-ui no longer sets SANDY_AUTO_APPROVE_PRIVILEGED.
@@ -293,6 +297,9 @@ export async function openTerminalPanel(
   // resizes that pass the existing suppression checks).
   let lastCols = 80;
   let lastRows = 24;
+  // A repaint the webview asked for before this host saw the panel as visible
+  // (its visibilitychange can beat onDidChangeViewState). Run on visible.
+  let pendingRepaint: { cols: number; rows: number } | undefined;
 
   // Push the wheel-scroll sensitivity to the webview, now and whenever the
   // setting changes — so users can tune scroll speed live without reloading.
@@ -321,6 +328,32 @@ export async function openTerminalPanel(
 
   log(`openTerminalPanel: workspace=${ws}${isReattach ? " (re-attach)" : ""}`);
 
+  // Redraw the whole terminal from tmux's own screen: on re-attach to a live
+  // pty (fresh xterm, no history), after sleep, and after a tab switch that
+  // resized xterm's grid (sandy-ui#55). `tmux refresh-client` through
+  // `sandy --exec` touches no pane size (tmuxRefresh.ts says why that
+  // matters); the resize toggle is the fallback for sandy < 2.7 or a
+  // non-sandy launchCommand.
+  const repaint = (reason: string, cols: number, rows: number): void => {
+    if (!session || session.exited) return;
+    const pty = session.pty;
+    lastCols = cols; lastRows = rows;
+    try { pty.resize(cols, rows); } catch { /* PTY may have exited */ }
+    const bin = execCapable && !launchOverride ? resolveSandyBinary() : undefined;
+    if (!bin) {
+      log(`${reason}: forcing tmux repaint by resize toggle at ${cols}x${rows}`);
+      try { forceTmuxRepaint(pty, cols, rows); } catch (e: any) { log(`${reason}: repaint failed: ${e?.message ?? e}`); }
+      return;
+    }
+    void refreshTmux(bin, ws!, buildCleanEnv()).then(err => {
+      if (!err) { log(`${reason}: tmux refresh-client at ${cols}x${rows}`); return; }
+      log(`${reason}: tmux refresh-client failed (${err}); falling back to a resize toggle`);
+      if (session && !session.exited && session.pty === pty) {
+        try { forceTmuxRepaint(pty, cols, rows); } catch { /* PTY may have exited */ }
+      }
+    });
+  };
+
   const sub = panel.webview.onDidReceiveMessage(async (m: ToHost) => {
     switch (m.type) {
       case "ready": {
@@ -333,10 +366,7 @@ export async function openTerminalPanel(
           // existing PTY and force a tmux repaint so the user sees the
           // current screen state. tmux only emits diffs from what it
           // thinks the terminal is showing — the fresh xterm.js has no
-          // history, so we need to provoke a full redraw. Resize-toggle
-          // (rows → rows-1 → rows) triggers SIGWINCH which tmux always
-          // responds to with a full screen redraw. Two short delays so
-          // the resizes register as distinct events.
+          // history, so we need to provoke a full redraw (repaint()).
           session = existingSession;
           supervisor.attach(ws!, panel);
           setTitleState({ kind: "attached" });
@@ -344,11 +374,7 @@ export async function openTerminalPanel(
             type: "data",
             data: `\r\n\x1b[2m[re-attached to existing sandy pid=${session.pty.pid}]\x1b[0m\r\n`,
           });
-          const cols = m.cols || 80;
-          const rows = m.rows || 24;
-          try {
-            forceTmuxRepaint(session.pty, cols, rows);
-          } catch (e: any) { log(`re-attach resize failed: ${e?.message ?? e}`); }
+          repaint("re-attach", m.cols || 80, m.rows || 24);
           break;
         }
 
@@ -530,21 +556,28 @@ export async function openTerminalPanel(
         session?.pty.resize(m.cols, m.rows);
         break;
       }
-      case "wake": {
+      case "wake":
         // The webview (client-side) detected a long wall-clock gap — the
         // laptop slept and woke (clamshell). The extension host + PTY never
         // died (esp. on a remote host), so tmux still thinks the client is
         // there at the old size and won't redraw — xterm is stuck on the
         // pre-sleep frame. Force the same SIGWINCH repaint the re-attach path
         // uses so the screen self-heals, instead of the user having to close
-        // and reopen the tab. Only meaningful for a live attached session.
-        if (!session || session.exited || !panel.visible) break;
+        // and reopen the tab.
+      case "repaint": {
+        // The webview refitted after the tab became visible again, and xterm's
+        // grid changed size on the way (sandy-ui#55). Shrinking and regrowing
+        // xterm blanks its bottom rows, and the pty may already be at this
+        // size, so a plain resize sends no SIGWINCH: force the full redraw.
+        // Only meaningful for a live attached session.
+        if (!session || session.exited) break;
         const cols = m.cols >= 20 ? m.cols : lastCols;
         const rows = m.rows >= 5  ? m.rows : lastRows;
-        lastCols = cols; lastRows = rows;
-        log(`wake: forcing tmux repaint at ${cols}x${rows}`);
-        try { forceTmuxRepaint(session.pty, cols, rows); }
-        catch (e: any) { log(`wake repaint failed: ${e?.message ?? e}`); }
+        if (!panel.visible) {
+          if (m.type === "repaint") pendingRepaint = { cols, rows };
+          break;
+        }
+        repaint(m.type, cols, rows);
         break;
       }
       case "osc":    handleOsc(m.event, setTitleState, setTitleActivity); break;
@@ -615,24 +648,19 @@ export async function openTerminalPanel(
       // Clear the OSC-notification badge — ● means "unseen activity", and
       // the user just looked (review finding B7).
       setTitleActivity(false);
+      if (pendingRepaint) repaint("repaint (held until visible)", pendingRepaint.cols, pendingRepaint.rows);
+      pendingRepaint = undefined;
       panel.webview.postMessage({ type: "refit" });
     }
   });
 }
 
-// Reads sandy.launch.close{BottomPanel,AuxiliaryBar,Sidebar} settings and
-// fires VSCode's built-in close commands for whichever are enabled. All
-// errors are swallowed — this is best-effort UX, never blocks the launch.
-// SIGTERM each lock's PID to give sandy.sh's cleanup trap a chance to run
-// (docker stop, docker network rm), wait briefly, then force-remove any
-// surviving lock files so the subsequent spawn isn't blocked. Best-effort:
-// each step is wrapped in try/catch and we always proceed to the spawn.
-// Force a full tmux repaint by toggling the PTY size (rows → rows-1 → rows).
-// tmux only emits diffs from what it thinks the terminal shows, so a fresh or
-// stale xterm gets nothing until a SIGWINCH provokes a full redraw. Used by
-// the re-attach path and the wake-from-sleep path. Short delays so the three
-// resizes register as distinct SIGWINCH events; all wrapped since the PTY may
-// have exited between scheduling and firing.
+// Fallback repaint (repaint() in openTerminalPanel prefers `tmux
+// refresh-client`): toggle the PTY size (rows → rows-1 → rows) so tmux gets a
+// SIGWINCH and redraws in full. It resizes every pane twice, which can leave
+// an agent's bottom row blank (tmuxRefresh.ts), so it is only for sandy < 2.7
+// or a non-sandy launchCommand. Short delays so the three resizes register as
+// distinct events; all wrapped since the PTY may have exited meanwhile.
 function forceTmuxRepaint(pty: Session["pty"], cols: number, rows: number): void {
   pty.resize(cols, rows);
   setTimeout(() => {
@@ -643,6 +671,9 @@ function forceTmuxRepaint(pty: Session["pty"], cols: number, rows: number): void
   }, 80);
 }
 
+// Reads sandy.launch.close{BottomPanel,AuxiliaryBar,Sidebar} settings and
+// fires VSCode's built-in close commands for whichever are enabled. All
+// errors are swallowed — this is best-effort UX, never blocks the launch.
 async function maximizeEditorSpaceIfRequested(): Promise<void> {
   const cfg = vscode.workspace.getConfiguration("sandy.launch");
   const closeBottom = cfg.get<boolean>("closeBottomPanel",  true);

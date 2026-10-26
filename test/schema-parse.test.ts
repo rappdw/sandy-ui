@@ -136,28 +136,28 @@ describe("parseSandySchema — env_only_keys are skipped", () => {
 describe("parseSandySchema — capabilities.approvalsReport", () => {
   it("is true only when cli_flags lists --approvals (sandy >= 2.7.0)", () => {
     const sandy = { ...minimal, cli_flags: [{ name: "--start" }, { name: "--approvals" }] } as SandySchema;
-    expect(parseSandySchema(sandy).capabilities).toEqual({ daemonMode: true, approvalsReport: true, updateSessions: false });
+    expect(parseSandySchema(sandy).capabilities).toEqual({ daemonMode: true, approvalsReport: true, updateSessions: false, execCommand: false });
   });
 });
 
 describe("parseSandySchema — capabilities.daemonMode (feature-detect via cli_flags)", () => {
   it("cli_flags containing {name:'--start'} → daemonMode true", () => {
     const sandy: SandySchema = { ...minimal, cli_flags: [{ name: "--attach" }, { name: "--start" }] };
-    expect(parseSandySchema(sandy).capabilities).toEqual({ daemonMode: true, approvalsReport: false, updateSessions: false });
+    expect(parseSandySchema(sandy).capabilities).toEqual({ daemonMode: true, approvalsReport: false, updateSessions: false, execCommand: false });
   });
 
   it("absent cli_flags → daemonMode false", () => {
-    expect(parseSandySchema(minimal).capabilities).toEqual({ daemonMode: false, approvalsReport: false, updateSessions: false });
+    expect(parseSandySchema(minimal).capabilities).toEqual({ daemonMode: false, approvalsReport: false, updateSessions: false, execCommand: false });
   });
 
   it("cli_flags present but without --start → daemonMode false", () => {
     const sandy: SandySchema = { ...minimal, cli_flags: [{ name: "--print-state" }, { name: "--print-schema" }] };
-    expect(parseSandySchema(sandy).capabilities).toEqual({ daemonMode: false, approvalsReport: false, updateSessions: false });
+    expect(parseSandySchema(sandy).capabilities).toEqual({ daemonMode: false, approvalsReport: false, updateSessions: false, execCommand: false });
   });
 
   it("bare-string '--start' entry → daemonMode true", () => {
     const sandy: SandySchema = { ...minimal, cli_flags: ["--print-state", "--start"] };
-    expect(parseSandySchema(sandy).capabilities).toEqual({ daemonMode: true, approvalsReport: false, updateSessions: false });
+    expect(parseSandySchema(sandy).capabilities).toEqual({ daemonMode: true, approvalsReport: false, updateSessions: false, execCommand: false });
   });
 });
 

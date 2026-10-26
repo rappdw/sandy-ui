@@ -8,6 +8,7 @@
 export {}; // mark as module so local types don't leak into global scope
 
 import { sgrPress, sgrDrag, sgrRelease } from "./sgrMouse";
+import { MIN_COLS, MIN_ROWS, syncAfterRefit } from "./resizeSync";
 
 // ---- Message contracts ----------------------------------------------------
 // Mirrors the host-side ToHost / FromHost types in src/terminal/webviewPanel.ts.
@@ -24,6 +25,7 @@ type ToHost =
   | { type: "input";  data: string }
   | { type: "resize"; cols: number; rows: number }
   | { type: "wake";   cols: number; rows: number }
+  | { type: "repaint"; cols: number; rows: number }
   | { type: "osc";    event: OscEvent }
   | { type: "openExternal"; uri: string }
   | { type: "log";    level: "info" | "error"; msg: string };
@@ -521,9 +523,12 @@ type FromHost =
   // tmux re-renders the screen narrow and bakes those hard newlines into
   // xterm's scrollback (no reflow possible after that, even if we resize
   // back wide). 20 cols is an aggressive minimum that no legitimate VSCode
-  // editor-area pane would shrink below.
-  const MIN_COLS = 20;
-  const MIN_ROWS = 5;
+  // editor-area pane would shrink below (MIN_COLS/MIN_ROWS, resizeSync.ts).
+
+  // Any change to xterm's grid size, from any fit. The next visibility refit
+  // then asks the host for a full repaint, not just a resize (sandy-ui#55).
+  let resizedSinceRepaint = false;
+  term.onResize(() => { resizedSinceRepaint = true; });
   const sendResize = (): void => {
     // Suppress while the tab is hidden — VSCode collapses our iframe during
     // tab transitions and ResizeObserver fires with bogus tiny dims. The
@@ -570,27 +575,39 @@ type FromHost =
 
   // ---- Forced refit on visibility-restore ---------------------------------
   // When the user switches to a different editor tab and back to Sandy, the
-  // iframe briefly hits zero width and xterm.js settles to a "squished few
-  // cols" state. ResizeObserver doesn't re-fire on the way back (size
-  // matches the squished value from xterm's perspective). Two paths into
-  // refit: (a) host posts {type:"refit"} via onDidChangeViewState, (b)
-  // document.visibilitychange as a backup if the host signal misses.
-  // Both wait two rAFs so VSCode's layout settles before fit.fit() measures.
+  // iframe briefly hits zero width and xterm.js can settle to a squished
+  // size. ResizeObserver doesn't re-fire on the way back (size matches the
+  // squished value from xterm's perspective). Two paths into refit: (a) host
+  // posts {type:"refit"} via onDidChangeViewState, (b) document
+  // visibilitychange as a backup if the host signal misses.
+  //
+  // A refit after xterm's grid changed size asks for a REPAINT, not a resize:
+  // shrinking and regrowing xterm blanks its bottom rows (the agent's status
+  // line), and the pty may already be at the restored size, so a plain resize
+  // sends no SIGWINCH and nothing redraws them (sandy-ui#55, resizeSync.ts).
+  const refitAndSync = (reason: string): void => {
+    if (document.hidden) return;
+    const el = document.getElementById("terminal");
+    if (el && (el.clientWidth < 50 || el.clientHeight < 30)) return;
+    const before = `${term.cols}x${term.rows}`;
+    try { fit.fit(); }
+    catch (e) { const err = e as { message?: string }; log("refit fit failed", err?.message ?? String(e)); }
+    const { action, next } = syncAfterRefit({ lastCols, lastRows, resizedSinceRepaint }, term.cols, term.rows);
+    ({ lastCols, lastRows, resizedSinceRepaint } = next);
+    if (action.kind === "none") return;
+    if (action.kind === "ignore") { log(`refit (${reason}): ignoring ${action.why}`); return; }
+    log(`refit (${reason}): ${before} → ${action.cols}x${action.rows}, ${action.kind}`);
+    post({ type: action.kind, cols: action.cols, rows: action.rows });
+  };
+  // Measure after three rAFs (two measured during the layout settle and
+  // reproduced the squished dims), then once more after REFIT_SETTLE_MS in
+  // case VSCode was still re-expanding the iframe: that second look is a
+  // no-op when nothing moved.
+  const REFIT_SETTLE_MS = 300;
   const forceRefit = (reason: string) => {
-    // Three rAFs (was two): the visibility-restore path needs an extra
-    // tick for VSCode's iframe to finish re-expanding. Two ticks left us
-    // measuring during the layout settle and produced the same tiny dims
-    // we were trying to recover from.
     requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => {
-      const before = `${term.cols}x${term.rows}`;
-      // Reset lastCols/lastRows so sendResize doesn't short-circuit if fit
-      // happens to land on the same numbers we last reported.
-      lastCols = 0; lastRows = 0;
-      try { fit.fit(); }
-      catch (e) { const err = e as { message?: string }; log("refit fit failed", err?.message ?? String(e)); }
-      const after = `${term.cols}x${term.rows}`;
-      log(`refit (${reason}): ${before} → ${after}`);
-      sendResize();
+      refitAndSync(reason);
+      setTimeout(() => refitAndSync(`${reason}, settled`), REFIT_SETTLE_MS);
     })));
   };
   document.addEventListener("visibilitychange", () => {
@@ -624,6 +641,7 @@ type FromHost =
       // Re-measure first (layout may have changed while asleep), then tell
       // the host our current size so it can SIGWINCH-toggle the PTY.
       try { fit.fit(); } catch { /* swallow */ }
+      resizedSinceRepaint = false;   // the wake repaint redraws everything
       post({ type: "wake", cols: term.cols, rows: term.rows });
     }
   }, HEARTBEAT_MS);

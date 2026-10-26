@@ -48,12 +48,15 @@ export function parseSandySchema(sandy: SandySchema): Schema {
   const approvalsReport = (sandy.cli_flags ?? []).some(f => flagName(f) === "--approvals");
   // `sandy --update-sessions` (1.2.0, sandy#41) — image refresh + restart.
   const updateSessions = (sandy.cli_flags ?? []).some(f => flagName(f) === "--update-sessions");
+  // `sandy --exec [-- CMD]` (2.7.0) — run one command in the session's
+  // container; used to make tmux redraw without a resize (sandy-ui#55).
+  const execCommand = (sandy.cli_flags ?? []).some(f => flagName(f) === "--exec");
 
   return {
     schema_version: sandy.schema_version,
     sandy_version:  sandy.sandy?.version ?? "unknown",
     fields,
-    capabilities: { daemonMode, approvalsReport, updateSessions },
+    capabilities: { daemonMode, approvalsReport, updateSessions, execCommand },
   };
 }
 

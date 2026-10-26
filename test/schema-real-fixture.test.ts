@@ -25,6 +25,7 @@ describe("real sandy 2.7.1 --print-schema", () => {
     expect(s.capabilities?.daemonMode).toBe(true);
     expect(s.capabilities?.approvalsReport).toBe(true);
     expect(s.capabilities?.updateSessions).toBe(true);
+    expect(s.capabilities?.execCommand).toBe(true);
   });
 
   it("routes only secret-type keys to .secrets — none of the 16 privileged non-secrets (#53)", () => {
@@ -79,7 +80,7 @@ describe("real sandy main (f585240) --print-schema", () => {
     const s = parseSandySchema(main);
     expect(evaluateCompat(main.sandy.version, main.schema_version)).toEqual({ kind: "ok" });
     for (const f of s.fields) expect(FIELD_TYPES as readonly string[], f.key).toContain(f.type);
-    expect(s.capabilities).toEqual({ daemonMode: true, approvalsReport: true, updateSessions: true });
+    expect(s.capabilities).toEqual({ daemonMode: true, approvalsReport: true, updateSessions: true, execCommand: true });
   });
 
   it("passes base_type through, and it agrees with how sandy-ui stores each type", () => {
