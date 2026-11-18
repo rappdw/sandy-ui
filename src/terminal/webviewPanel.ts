@@ -195,9 +195,41 @@ export async function openTerminalPanel(
 
   const isReattach = existingSession !== undefined;
 
+  // Open the tab FIRST. Everything below until the HTML is set (schema lookup,
+  // `sandy --approvals`) shells out to sandy, which can take seconds; doing it
+  // before createWebviewPanel left the user clicking Launch with nothing on
+  // screen. The webview loads no HTML until the checks pass, so it can't send
+  // "ready" before the message handler exists.
+  const panel = vscode.window.createWebviewPanel(
+    "sandy.terminal",
+    "Sandy",
+    vscode.ViewColumn.Active,
+    {
+      enableScripts: true,
+      retainContextWhenHidden: true,  // keep xterm buffer alive across hide/show
+      localResourceRoots: [vscode.Uri.joinPath(ctx.extensionUri, "media")],
+    }
+  );
+
+  // Title is rendered from state, not string-patched. The old code did
+  // `title.startsWith("● ")` / `slice(2)` surgery, which breaks the moment the
+  // title has a prefix of its own — and an OSC-0 title used to overwrite the
+  // whole thing, losing the workspace. Keep the pieces separate and re-render.
+  let titleState: TitleState = { kind: "starting" };
+  let titleActivity = false;
+  const renderTitle = () => { panel.title = panelTitle(ws, titleState, titleActivity); };
+  const setTitleState = (next: TitleState) => { titleState = next; renderTitle(); };
+  const setTitleActivity = (on: boolean) => { titleActivity = on; renderTitle(); };
+  renderTitle();
+  // The user may close the tab while the checks run; then don't launch.
+  let closedBeforeLaunch = false;
+  const earlyDispose = panel.onDidDispose(() => { closedBeforeLaunch = true; });
+
   // `sandy --approvals` (2.7.0+) drives the launch preview, the post-start
   // "running without" warning, and the exit-6 explanation.
+  let t0 = Date.now();
   const caps = (await getCachedSchema(ctx.globalStorageUri.fsPath, schemaMock as Schema)).schema?.capabilities;
+  log(`launch: schema lookup ${Date.now() - t0}ms`);
   const approvalsCapable = caps?.approvalsReport === true;
   // `sandy --exec` (2.7.0) lets a repaint ask tmux to redraw without a resize.
   const execCapable = caps?.execCommand === true;
@@ -205,11 +237,14 @@ export async function openTerminalPanel(
     // Read-only launch preview (decision C). sandy asks for approval itself, in
     // the terminal; sandy-ui no longer sets SANDY_AUTO_APPROVE_PRIVILEGED.
     // Never blocks a launch on its own failure — sandy enforces every gate.
+    t0 = Date.now();
     const preflight = await checkPreflight(ctx, ws, resolveSandyBinary(), approvalsCapable, buildCleanEnv());
+    log(`preflight: ${Date.now() - t0}ms (including any time the preview was open)`);
     if (preflight.note) log(`preflight: ${preflight.note}`);
     if (preflight.report?.complete) log(`preflight: unresolved gates = [${preflight.report.unresolved.join(", ")}]`);
     if (!preflight.proceed) {
       log("preflight: launch cancelled from the preview");
+      panel.dispose();
       return;
     }
   } else {
@@ -249,28 +284,11 @@ export async function openTerminalPanel(
   // Each command is fire-and-forget — we don't await, don't fail launch
   // if any errors. void executeCommand returns are intentional.
   await maximizeEditorSpaceIfRequested();
-
-  const panel = vscode.window.createWebviewPanel(
-    "sandy.terminal",
-    "Sandy",
-    vscode.ViewColumn.Active,
-    {
-      enableScripts: true,
-      retainContextWhenHidden: true,  // keep xterm buffer alive across hide/show
-      localResourceRoots: [vscode.Uri.joinPath(ctx.extensionUri, "media")],
-    }
-  );
-
-  // Title is rendered from state, not string-patched. The old code did
-  // `title.startsWith("● ")` / `slice(2)` surgery, which breaks the moment the
-  // title has a prefix of its own — and an OSC-0 title used to overwrite the
-  // whole thing, losing the workspace. Keep the pieces separate and re-render.
-  let titleState: TitleState = { kind: "starting" };
-  let titleActivity = false;
-  const renderTitle = () => { panel.title = panelTitle(ws, titleState, titleActivity); };
-  const setTitleState = (next: TitleState) => { titleState = next; renderTitle(); };
-  const setTitleActivity = (on: boolean) => { titleActivity = on; renderTitle(); };
-  renderTitle();
+  earlyDispose.dispose();
+  if (closedBeforeLaunch) {
+    log("launch: tab closed before sandy started; not launching");
+    return;
+  }
 
   const mediaUri = (sub: string) =>
     panel.webview.asWebviewUri(vscode.Uri.joinPath(ctx.extensionUri, "media", "terminal", sub));
