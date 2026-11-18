@@ -8,7 +8,7 @@ Install it:
 curl -fsSL https://raw.githubusercontent.com/rappdw/sandy/main/install.sh | bash
 ```
 
-The installer installs the current state of sandy's `main` branch, which can be ahead of its latest release.
+The installer (and `sandy --upgrade`) installs sandy's latest release. To follow its `main` branch instead, set `SANDY_CHANNEL=dev`.
 
 Already installed? This step checks itself — it ticks off automatically once `sandy` is found on your `PATH` (or at `sandy.binaryPath` if you've set that setting). No need to reload the window; the check re-runs live.
 

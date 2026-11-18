@@ -170,7 +170,7 @@ replay on reattach, multi-root workspaces.
 **Nothing is required for sandy-ui's code.** Everything we were blocked on has shipped. One
 item matters for the 1.0 *experience*, and the rest are optional or policy:
 
-0. **Recommended before sandy-ui 1.0 — maintainer's decision, being raised now.** Both
+0. ✅ **Resolved in sandy 2.8.0 (2026-10-11):** `install.sh` and `sandy --upgrade` now install the latest release; `SANDY_CHANNEL=dev` follows main. The walkthrough says so. Original ask: **Recommended before sandy-ui 1.0 — maintainer's decision, being raised now.** Both
    `install.sh` and `sandy --upgrade` download `main`'s HEAD, not the latest release tag. So a
    stranger following our walkthrough's first instruction today gets **2.8.0-dev — unreleased
    code** — not v2.7.1, and that install reports `commit: ""`, defeating version-keyed caches.

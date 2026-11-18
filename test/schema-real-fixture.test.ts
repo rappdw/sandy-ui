@@ -70,11 +70,12 @@ describe("real sandy 2.7.1 --print-schema", () => {
   });
 });
 
-// sandy main after #440 (f585240, 2.8.0-dev): adds base_type to every config
-// key and documents the closed set of types. The seed of the nightly contract
+// sandy v2.8.0 (7edf8a1, released 2026-10-11): adds base_type to every config
+// key (#440) and documents the closed set of types. Replaced the 2.8.0-dev
+// (f585240) capture, which had the same keys, types and flags. The seed of the nightly contract
 // check sandy's maintainer asked consumers to own (Decision 4).
-describe("real sandy main (f585240) --print-schema", () => {
-  const main = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "sandy-2.8.0-dev-f585240-print-schema.json"), "utf8"));
+describe("real sandy 2.8.0 --print-schema", () => {
+  const main = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "sandy-2.8.0-print-schema.json"), "utf8"));
 
   it("parses, passes the gate, and every type is one sandy-ui renders", () => {
     const s = parseSandySchema(main);
